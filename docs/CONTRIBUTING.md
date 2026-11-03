@@ -1,6 +1,6 @@
 # Contributing to Devyard
 
-> Status: **proposal** (DY-R1). Branch protection on `main` is **pending Ian's approval** and is not configured yet.
+> Status: **proposal** (DY-R1). Branch protection on `main` is applied (see below).
 
 ## Branching strategy
 
@@ -49,6 +49,17 @@ Types: `feat`, `fix`, `docs`, `chore`, `ci`, `refactor`, `test`, `perf`, `build`
 - Releases are tagged `vX.Y.Z` on `main` (annotated tags) after the release PR merges.
 - Pre-releases use `vX.Y.Z-rc.N`.
 
-## Branch protection (pending approval)
+## Branch protection (applied)
 
-Proposed for `main`, **not yet applied, awaiting Ian's approval**: require a PR, require the `check` status, require 1 approving review, block force-pushes and deletion.
+Ian approved these rules for `main`, and they are now in effect:
+
+- Pull request required, with **1 approving review**.
+- Required status check: `check` (CI workflow), **strict**: the branch must be up to date with `main`.
+- **Enforced for admins** (`enforce_admins: true`).
+- Force-pushes blocked, branch deletion blocked. No push restrictions on specific users.
+
+### Approval flow
+
+- PRs are authored as `iant89`, and GitHub won't let an author approve their own PR.
+- Approvals come from **Ian's second GitHub account**. That account must be a repo collaborator with **write** access, or its approval doesn't count.
+- Once that approval is in and CI is green, the **Repository Maintainer** merges, squashing by default.
