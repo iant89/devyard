@@ -13,6 +13,7 @@ import { authPlugin } from './modules/auth/plugin.js';
 import { authRoutes } from './modules/auth/routes.js';
 import { purgeExpired } from './modules/auth/service.js';
 import { healthRoutes } from './modules/health/routes.js';
+import { usersRoutes } from './modules/users/routes.js';
 
 export interface BuildOptions {
   /** Destination for log lines (tests capture logs with this). Defaults to stdout. */
@@ -83,7 +84,8 @@ export async function buildApp(
       await v1.register(authPlugin);
       await v1.register(healthRoutes);
       await v1.register(authRoutes, { prefix: '/auth' });
-      // Batch B3+: users, projects modules register here.
+      await v1.register(usersRoutes, { prefix: '/users' });
+      // Batch B4: projects module registers here.
     },
     { prefix: API_PREFIX },
   );

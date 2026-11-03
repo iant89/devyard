@@ -5,18 +5,41 @@ import {
   timingSafeEqual,
   type ScryptOptions,
 } from 'node:crypto';
+import { BusyError } from './errors.js';
 
 let active = 0;
+let peak = 0;
 const waiters: (() => void)[] = [];
+/** Bounded wait queue: beyond this, fail fast instead of piling up memory behind slow hashes. */
+export const MAX_QUEUED = 256;
+
+/**
+ * Counting semaphore. On release, the slot is handed straight to the next waiter (active stays
+ * the same) so a newly arriving caller can't jump in between and exceed MAX_CONCURRENT.
+ */
 async function withSlot<T>(fn: () => Promise<T>): Promise<T> {
-  if (active >= MAX_CONCURRENT) await new Promise<void>((r) => waiters.push(r));
-  active++;
+  if (active >= MAX_CONCURRENT) {
+    if (waiters.length >= MAX_QUEUED) throw new BusyError();
+    await new Promise<void>((r) => waiters.push(r)); // woken holding a transferred slot
+  } else {
+    active++;
+  }
+  peak = Math.max(peak, active);
   try {
     return await fn();
   } finally {
-    active--;
-    waiters.shift()?.();
+    const next = waiters.shift();
+    if (next) next();
+    else active--;
   }
+}
+
+/** Test/diagnostic view of the hashing semaphore. */
+export function scryptStats(): { active: number; queued: number; peak: number; max: number } {
+  return { active, queued: waiters.length, peak, max: MAX_CONCURRENT };
+}
+export function resetScryptPeak(): void {
+  peak = active;
 }
 
 const scrypt = (pw: string, salt: Buffer, len: number, opts: ScryptOptions) =>

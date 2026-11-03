@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import type { PermissionKey } from '../../db/seed.js';
 import { ApiError } from '../../lib/errors.js';
+import { can } from '../permissions/service.js';
 import {
   csrfMatches,
   resolveSession,
@@ -85,6 +86,8 @@ export const authPlugin = fp(async (app: FastifyInstance) => {
     const token = req.cookies[sessionCookieName(app.config.cookieSecure)];
     if (token) {
       const resolved = resolveSession(app.db, app.config, token);
+      // Built once per request (roles + permissions = 2 queries) and reused by handlers via
+      // req.auth.publicUser, e.g. GET /auth/me and GET /users/:id on yourself.
       if (resolved) req.auth = { ...resolved, publicUser: toPublicUser(app.db, resolved.user) };
     }
 
@@ -101,7 +104,7 @@ export const authPlugin = fp(async (app: FastifyInstance) => {
 
     if ((cfg.auth || cfg.permission) && !req.auth)
       throw new ApiError('UNAUTHENTICATED', 'Authentication required');
-    if (cfg.permission && !req.auth!.publicUser.permissions.includes(cfg.permission))
+    if (cfg.permission && !can(req.auth!.publicUser, cfg.permission))
       throw new ApiError('FORBIDDEN', 'Insufficient permissions');
   });
 });
