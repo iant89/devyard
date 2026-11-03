@@ -14,6 +14,11 @@ export function findLiveUser(db: Pick<Db, 'select'>, id: string): UserRow | unde
     .get();
 }
 
+/** Includes soft-deleted users (activity stays readable for auditors). */
+export function findAnyUser(db: Pick<Db, 'select'>, id: string): UserRow | undefined {
+  return db.select().from(users).where(eq(users.id, id)).get();
+}
+
 export function requireLiveUser(db: Pick<Db, 'select'>, id: string): UserRow {
   const u = findLiveUser(db, id);
   if (!u) throw new ApiError('NOT_FOUND', 'User not found');
@@ -120,5 +125,9 @@ export function toAuditEntry(r: typeof auditLogs.$inferSelect): AuditEntry {
 }
 
 export function userIdsWithRole(db: Pick<Db, 'select'>, role: RoleName) {
-  return db.select({ id: userRoles.userId }).from(userRoles).where(eq(userRoles.roleId, role));
+  return db
+    .select({ id: userRoles.userId })
+    .from(userRoles)
+    .innerJoin(users, eq(users.id, userRoles.userId))
+    .where(and(eq(userRoles.roleId, role), isNull(users.deletedAt)));
 }

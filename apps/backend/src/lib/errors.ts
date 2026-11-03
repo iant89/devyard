@@ -13,6 +13,14 @@ const STATUS: Record<ErrorCode, number> = {
   INTERNAL: 500,
 };
 
+/** Thrown by lib/crypto when the hashing queue is full; mapped to 429 RATE_LIMITED. */
+export class BusyError extends Error {
+  constructor(message = 'Server busy, retry shortly') {
+    super(message);
+    this.name = 'BusyError';
+  }
+}
+
 export class ApiError extends Error {
   constructor(
     public readonly code: ErrorCode,
@@ -35,9 +43,10 @@ export function registerErrorHandling(app: FastifyInstance): void {
     return reply.status(404).send(body);
   });
 
-  app.setErrorHandler((err: FastifyError | ApiError | ZodError, req, reply) => {
+  app.setErrorHandler((err: FastifyError | ApiError | ZodError | BusyError, req, reply) => {
     let apiErr: ApiError;
     if (err instanceof ApiError) apiErr = err;
+    else if (err instanceof BusyError) apiErr = new ApiError('RATE_LIMITED', err.message);
     else if (err instanceof ZodError)
       apiErr = new ApiError(
         'VALIDATION_FAILED',

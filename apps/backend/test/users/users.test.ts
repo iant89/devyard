@@ -1,7 +1,8 @@
+import { eq } from 'drizzle-orm';
 import { PasswordResetIssued, PublicUser, UserActivityEntry } from '@devyard/contracts';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from 'vitest';
-import { projects } from '../../src/db/schema.js';
+import { projects, users } from '../../src/db/schema.js';
 import { newId } from '../../src/lib/ids.js';
 import { testApp, TRUST_LOCAL_PROXY } from '../helpers.js';
 import { freshIp, login } from '../auth/fixtures.js';
@@ -126,9 +127,13 @@ describe('users: behaviour', () => {
     let res = await call(app, a.developer, 'PATCH', url, {
       displayName: 'Dev 2',
       email: 'd2@example.com',
+      currentPassword: PW,
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().data).toMatchObject({ displayName: 'Dev 2', email: 'd2@example.com' });
+    expect(res.json().data).toMatchObject({
+      displayName: 'Dev 2',
+      email: 'd2@example.com',
+    });
     res = await call(app, a.developer, 'PATCH', url, { roles: ['admin'] });
     expect(res.statusCode).toBe(403);
     res = await call(app, a.developer, 'PATCH', url, { status: 'disabled' });
@@ -296,5 +301,121 @@ describe('users: behaviour', () => {
         expect(e).toMatchObject({ targetType: 'user', targetId: a.ids.viewer });
       else expect(e.actorId).toBe(a.ids.viewer);
     expect(res.json().meta.total).toBe(rows.length);
+  });
+
+  it('non-managers cannot enumerate emails: q ignores email, sort=email → 400', async () => {
+    const res = await call(app, a.viewer, 'GET', '/api/v1/users?q=dev@example.com');
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toEqual([]);
+    expect(
+      (await call(app, a.viewer, 'GET', '/api/v1/users?q=example.com')).json().meta.total,
+    ).toBe(0);
+    for (const sort of ['email', '-email', 'lastLoginAt'])
+      expect(
+        (await call(app, a.viewer, 'GET', `/api/v1/users?sort=${sort}`)).statusCode,
+        sort,
+      ).toBe(400);
+    for (const sort of ['username', '-displayName', 'createdAt'])
+      expect(
+        (await call(app, a.developer, 'GET', `/api/v1/users?sort=${sort}`)).statusCode,
+        sort,
+      ).toBe(200);
+    // managers keep email search and sort
+    const admin = await call(app, a.admin, 'GET', '/api/v1/users?q=dev@example.com&sort=email');
+    expect(admin.json().data.map((u: PublicUser) => u.username)).toEqual(['dev']);
+  });
+
+  it('non-managers see only active users; role filter is rejected; status param is ignored', async () => {
+    await call(app, a.admin, 'PATCH', `/api/v1/users/${a.ids.developer}`, { status: 'disabled' });
+    const list = await call(app, a.viewer, 'GET', '/api/v1/users');
+    expect(
+      list
+        .json()
+        .data.map((u: { username: string }) => u.username)
+        .sort(),
+    ).toEqual(['admin', 'view']);
+    const disabled = await call(app, a.viewer, 'GET', '/api/v1/users?status=disabled');
+    expect(disabled.json().data.map((u: { username: string }) => u.username)).not.toContain('dev');
+    const role = await call(app, a.viewer, 'GET', '/api/v1/users?role=admin');
+    expect(role.statusCode).toBe(400);
+    expect(role.json().error.details[0].path).toBe('role');
+    expect(
+      (await call(app, a.admin, 'GET', '/api/v1/users?status=disabled')).json().meta.total,
+    ).toBe(1);
+  });
+
+  it('changing your own email requires currentPassword (and counts failures)', async () => {
+    const url = `/api/v1/users/${a.ids.viewer}`;
+    let res = await call(app, a.viewer, 'PATCH', url, { email: 'new-v@example.com' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.details[0].path).toBe('currentPassword');
+    res = await call(app, a.viewer, 'PATCH', url, {
+      email: 'new-v@example.com',
+      currentPassword: 'wrong pw!!',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(
+      app.db.select().from(users).where(eq(users.id, a.ids.viewer)).get()!.failedLoginCount,
+    ).toBe(1);
+    res = await call(app, a.viewer, 'PATCH', url, {
+      email: 'new-v@example.com',
+      currentPassword: PW,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.email).toBe('new-v@example.com');
+    // displayName alone and unchanged email need no password; admins editing others need none
+    expect(
+      (await call(app, a.viewer, 'PATCH', url, { displayName: 'V', email: 'new-v@example.com' }))
+        .statusCode,
+    ).toBe(200);
+    expect((await call(app, a.admin, 'PATCH', url, { email: 'v3@example.com' })).statusCode).toBe(
+      200,
+    );
+    expect(
+      (
+        await call(app, a.admin, 'PATCH', `/api/v1/users/${a.ids.admin}`, {
+          email: 'boss@example.com',
+        })
+      ).statusCode,
+    ).toBe(400);
+  });
+
+  it('admin self-delete → 409 even when other admins exist', async () => {
+    await createUser(app, a.admin, 'admin2', ['admin']);
+    const res = await call(app, a.admin, 'DELETE', `/api/v1/users/${a.ids.admin}`);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toMatch(/your own account/);
+  });
+
+  it("a deleted user's activity stays readable to users.manage", async () => {
+    await call(app, a.admin, 'DELETE', `/api/v1/users/${a.ids.viewer}`);
+    const res = await call(app, a.admin, 'GET', `/api/v1/users/${a.ids.viewer}/activity`);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.map((e: { action: string }) => e.action)).toContain('user.delete');
+    expect((await call(app, a.admin, 'GET', `/api/v1/users/${a.ids.viewer}`)).statusCode).toBe(404);
+  });
+
+  it('issuing a new reset token invalidates older unused ones', async () => {
+    const issue = async () =>
+      (await call(app, a.admin, 'POST', `/api/v1/users/${a.ids.developer}/password-reset`)).json()
+        .data.token as string;
+    const first = await issue();
+    const second = await issue();
+    const confirm = (token: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/password-reset/confirm',
+        payload: { token, newPassword: 'reset password value' },
+      });
+    expect((await confirm(first)).statusCode).toBe(400);
+    expect((await confirm(second)).statusCode).toBe(204);
+  });
+
+  it('role filter ignores soft-deleted users', async () => {
+    const extra = await createUser(app, a.admin, 'devgone', ['developer']);
+    await call(app, a.admin, 'DELETE', `/api/v1/users/${extra}`);
+    const res = await call(app, a.admin, 'GET', '/api/v1/users?role=developer');
+    expect(res.json().data.map((u: PublicUser) => u.username)).toEqual(['dev']);
+    expect(res.json().meta.total).toBe(1);
   });
 });

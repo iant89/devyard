@@ -196,7 +196,7 @@ export function revokeSession(
  * B3's `POST /users/:id/password-reset` wraps this.
  */
 export function issuePasswordResetToken(
-  db: Pick<Db, 'insert'>,
+  db: Pick<Db, 'insert' | 'delete'>,
   userId: string,
   issuedBy: string | null,
   ttlMs = RESET_TOKEN_TTL_MS,
@@ -204,6 +204,10 @@ export function issuePasswordResetToken(
 ): { token: string; expiresAt: Date } {
   const token = newToken();
   const expiresAt = new Date(now + ttlMs);
+  // Only the newest token is valid: drop any older unused ones for this user.
+  db.delete(passwordResetTokens)
+    .where(and(eq(passwordResetTokens.userId, userId), isNull(passwordResetTokens.usedAt)))
+    .run();
   db.insert(passwordResetTokens)
     .values({ id: newId(now), tokenHash: sha256(token), userId, issuedBy, expiresAt })
     .run();
