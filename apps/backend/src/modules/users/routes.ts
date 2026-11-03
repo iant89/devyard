@@ -242,7 +242,11 @@ export const usersRoutes: FastifyPluginAsync = async (app) => {
       const { id } = IdParams.parse(req.params);
       const q = PageQuery.pick({ page: true, pageSize: true }).parse(req.query);
       requireLiveUser(db, id);
-      const where = eq(auditLogs.actorId, id);
+      // Actor side and target side (spec §5.2 "view user activity"; Tech Lead ruling on PR #4).
+      const where = or(
+        eq(auditLogs.actorId, id),
+        and(eq(auditLogs.targetType, 'user'), eq(auditLogs.targetId, id)),
+      );
       const total =
         db
           .select({ n: sql<number>`count(*)` })
@@ -257,7 +261,13 @@ export const usersRoutes: FastifyPluginAsync = async (app) => {
         .limit(q.pageSize)
         .offset((q.page - 1) * q.pageSize)
         .all();
-      return { data: rows.map(toAuditEntry), meta: { page: q.page, pageSize: q.pageSize, total } };
+      return {
+        data: rows.map((r) => ({
+          ...toAuditEntry(r),
+          relation: r.actorId === id ? ('actor' as const) : ('target' as const),
+        })),
+        meta: { page: q.page, pageSize: q.pageSize, total },
+      };
     },
   );
 };

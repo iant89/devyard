@@ -54,6 +54,13 @@ export const AuditEntry = z.object({
 });
 export type AuditEntry = z.infer<typeof AuditEntry>;
 
+/**
+ * GET /users/:id/activity item: an audit entry where the user is the actor and/or the target
+ * (`targetType='user'`). `relation` is 'actor' when they performed it (including actions on themselves).
+ */
+export const UserActivityEntry = AuditEntry.extend({ relation: z.enum(['actor', 'target']) });
+export type UserActivityEntry = z.infer<typeof UserActivityEntry>;
+
 /** Sortable fields for GET /users (`field` or `-field`). */
 export const USER_SORT_FIELDS = [
   'username',

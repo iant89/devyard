@@ -1,4 +1,4 @@
-import { PasswordResetIssued, PublicUser } from '@devyard/contracts';
+import { PasswordResetIssued, PublicUser, UserActivityEntry } from '@devyard/contracts';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from 'vitest';
 import { projects } from '../../src/db/schema.js';
@@ -267,5 +267,34 @@ describe('users: behaviour', () => {
         .data.slice(3, 6)
         .map((e: { id: string }) => e.id),
     ).toEqual(ids2);
+  });
+
+  it('activity includes entries where the user is the target, marked by relation', async () => {
+    await call(app, a.admin, 'PATCH', `/api/v1/users/${a.ids.viewer}`, { displayName: 'Renamed' });
+    await call(app, a.admin, 'POST', `/api/v1/users/${a.ids.viewer}/password-reset`);
+    await call(app, a.viewer, 'PATCH', `/api/v1/users/${a.ids.viewer}`, { displayName: 'Mine' });
+    const res = await call(
+      app,
+      a.admin,
+      'GET',
+      `/api/v1/users/${a.ids.viewer}/activity?pageSize=100`,
+    );
+    expect(res.statusCode).toBe(200);
+    const rows = res.json().data.map((e: unknown) => UserActivityEntry.parse(e));
+    const byAction = (action: string, relation: string) =>
+      rows.filter((e: UserActivityEntry) => e.action === action && e.relation === relation);
+    // done TO the viewer by the admin
+    expect(byAction('user.create', 'target')).toHaveLength(1);
+    expect(byAction('user.password_reset_issue', 'target')).toHaveLength(1);
+    expect(byAction('user.update', 'target')).toHaveLength(1);
+    // done BY the viewer (their own login and self-edit are actor entries, not duplicated as target)
+    expect(byAction('auth.login', 'actor').length).toBeGreaterThanOrEqual(1);
+    expect(byAction('user.update', 'actor')).toHaveLength(1);
+    expect(new Set(rows.map((e: UserActivityEntry) => e.id)).size).toBe(rows.length);
+    for (const e of rows)
+      if (e.relation === 'target')
+        expect(e).toMatchObject({ targetType: 'user', targetId: a.ids.viewer });
+      else expect(e.actorId).toBe(a.ids.viewer);
+    expect(res.json().meta.total).toBe(rows.length);
   });
 });

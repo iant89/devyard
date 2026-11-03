@@ -370,6 +370,12 @@ Rate limits and CSRF for these routes are covered in §5.5 and §5.7. Every unsa
 | POST   | `/:id/password-reset` | `users.manage`                                              | –                                                                 | 201 `{data:{token, expiresAt}}`                                                                                 |
 | GET    | `/:id/activity`       | `users.manage` or `audit.read`                              | `PageQuery`                                                       | list of audit entries for that actor (§5.2 "view user activity")                                                |
 
+Notes (Tech Lead rulings on PR #4):
+
+- **Reduced shape:** callers without `users.manage` get `UserSummary {id, username, displayName}` from both `GET /` and `GET /:id`. The exception is `GET /:id` on their own id, which returns the full `PublicUser`.
+- **Deleted users:** soft-deleted users keep their username and email reserved (the unique indexes cover deleted rows) for the MVP. Reusing them needs the later hard-purge admin action (D7).
+- **Activity:** `GET /:id/activity` returns `UserActivityEntry` = `AuditEntry` + `relation: 'actor' | 'target'`. It covers entries the user performed (`actor`, including actions on themselves) and entries performed on them (`targetType='user'`, `targetId=:id`, marked `target`). Newest first, paginated.
+
 ### 6.4 Projects — `/api/v1/projects` (§6)
 
 | Method | Path                   | Min project role                               | Request                                                                                           | Response                                                                     |
