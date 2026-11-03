@@ -43,19 +43,6 @@ export function resetScryptPeak(): void {
   peak = active;
 }
 
-let active = 0;
-const waiters: (() => void)[] = [];
-async function withSlot<T>(fn: () => Promise<T>): Promise<T> {
-  if (active >= MAX_CONCURRENT) await new Promise<void>((r) => waiters.push(r));
-  active++;
-  try {
-    return await fn();
-  } finally {
-    active--;
-    waiters.shift()?.();
-  }
-}
-
 const scrypt = (pw: string, salt: Buffer, len: number, opts: ScryptOptions) =>
   withSlot(
     () =>
