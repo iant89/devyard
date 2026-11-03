@@ -15,7 +15,7 @@ React 19 + TypeScript + Vite UI for Devyard, built on ENTERPRISE-UI (`@enterpris
 
 ```sh
 npm run build:contracts          # from repo root, once
-npm run dev -w @devyard/frontend # http://localhost:5173, proxies /api → DEVYARD_API_URL (default :3000)
+npm run dev -w @devyard/frontend # http://localhost:5173, proxies /api → DEVYARD_API_URL (default :4000)
 npm test -w @devyard/frontend    # vitest (jsdom)
 npm run build -w @devyard/frontend
 npx playwright install chromium && npm run test:e2e -w @devyard/frontend   # e2e + axe + screenshots (mocked API)
