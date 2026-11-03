@@ -107,6 +107,7 @@ test.describe('desktop', () => {
     await page.goto('/');
     await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
     await page.getByLabel('Username or email').blur();
+    await expect(page.getByRole('checkbox')).toHaveCount(0);
     await check(page, '01-login');
 
     await page.getByLabel('Username or email').fill('ian');

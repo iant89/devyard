@@ -3,7 +3,6 @@ import { User } from 'lucide-react';
 import {
   Button,
   Card,
-  Checkbox,
   Flex,
   Form,
   FormField,
@@ -43,7 +42,6 @@ export function LoginPage({ expired = false }: { expired?: boolean }) {
   const { login } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [keepSignedIn, setKeepSignedIn] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<Failure>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
@@ -108,13 +106,8 @@ export function LoginPage({ expired = false }: { expired?: boolean }) {
                 disabled={busy}
               />
             </FormField>
-            <Flex justify="space-between" align="center">
-              <Checkbox
-                label="Keep me signed in"
-                checked={keepSignedIn}
-                onChange={setKeepSignedIn}
-                disabled={busy}
-              />
+            {/* No "keep me signed in": sessions are fixed (7 days, 24 h idle) — plan §5. */}
+            <Flex justify="flex-end" align="center">
               <Link
                 href="/password-reset"
                 aria-disabled={busy || undefined}

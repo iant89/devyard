@@ -121,3 +121,15 @@ describe('auth flows', () => {
     expect((logoutCall![1]!.headers as Record<string, string>)['X-CSRF-Token']).toBe('csrf');
   });
 });
+
+describe('login form', () => {
+  it('has no "keep me signed in" option (fixed session lifetime)', async () => {
+    setup((url) => {
+      if (url.endsWith('/auth/me')) return unauth();
+      return res(200, { data: { required: false } });
+    });
+    await screen.findByRole('button', { name: 'Sign in' });
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByText(/keep me signed in/i)).not.toBeInTheDocument();
+  });
+});
