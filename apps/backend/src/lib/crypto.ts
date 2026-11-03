@@ -6,13 +6,45 @@ import {
   type ScryptOptions,
 } from 'node:crypto';
 
+let active = 0;
+const waiters: (() => void)[] = [];
+async function withSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (active >= MAX_CONCURRENT) await new Promise<void>((r) => waiters.push(r));
+  active++;
+  try {
+    return await fn();
+  } finally {
+    active--;
+    waiters.shift()?.();
+  }
+}
+
 const scrypt = (pw: string, salt: Buffer, len: number, opts: ScryptOptions) =>
-  new Promise<Buffer>((resolve, reject) =>
-    scryptCb(pw, salt, len, opts, (err, key) => (err ? reject(err) : resolve(key))),
+  withSlot(
+    () =>
+      new Promise<Buffer>((resolve, reject) =>
+        scryptCb(pw, salt, len, opts, (err, key) => (err ? reject(err) : resolve(key))),
+      ),
   );
 
-/** Spec §5.1 "secure password hashing": scrypt (Node built-in, OWASP-acceptable params). */
-const N = 2 ** 17;
+/**
+ * Test knob (DEVYARD_SCRYPT_N). Call sites only pass a value when NODE_ENV=test (see config);
+ * anything else resets to the default.
+ */
+export function configureScrypt(opts: { N?: number | undefined } = {}): void {
+  const n = opts.N ?? DEFAULT_SCRYPT_N;
+  if (!Number.isInteger(Math.log2(n)) || n < 2) throw new Error('scrypt N must be a power of two');
+  N = n;
+}
+
+/**
+ * Spec §5.1 "secure password hashing": scrypt (Node built-in). N=2^16, r=8 (64 MiB per hash), with at
+ * most MAX_CONCURRENT hashes in flight so a login burst can't exhaust memory or the libuv pool.
+ * Hashes are self-describing, so verification always uses the parameters stored with the hash.
+ */
+export const DEFAULT_SCRYPT_N = 2 ** 16;
+let N = DEFAULT_SCRYPT_N;
+const MAX_CONCURRENT = 4;
 const r = 8;
 const p = 1;
 const KEYLEN = 64;

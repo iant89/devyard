@@ -210,7 +210,10 @@ export function issuePasswordResetToken(
   return { token, expiresAt };
 }
 
-/** Hourly purge job body (plan §5.3). */
+/**
+ * Hourly purge job body (plan §5.3). Deleting session rows is safe for forensics: the audit log
+ * (auth.login / auth.logout / auth.session_revoke ...) keeps the history of purged sessions.
+ */
 export function purgeExpired(
   db: Db,
   config: AppConfig,
@@ -233,6 +236,33 @@ export function purgeExpired(
     )
     .run();
   return { sessions: s.changes, resetTokens: t.changes };
+}
+
+/**
+ * Atomically records a failed password check (login or password change). Increments the counter
+ * with a single UPDATE ... RETURNING and, when it reaches MAX_FAILED_LOGINS, locks the account with
+ * a conditional UPDATE so concurrent failures produce exactly one lock. Returns true when this call
+ * locked the account.
+ */
+export function recordFailedPassword(db: Db, userId: string, now = Date.now()): boolean {
+  const row = db
+    .update(users)
+    .set({ failedLoginCount: sql`${users.failedLoginCount} + 1` })
+    .where(eq(users.id, userId))
+    .returning({ count: users.failedLoginCount })
+    .get();
+  if (!row || row.count < MAX_FAILED_LOGINS) return false;
+  const locked = db
+    .update(users)
+    .set({ failedLoginCount: 0, lockedUntil: new Date(now + LOCKOUT_MS) })
+    .where(and(eq(users.id, userId), sql`${users.failedLoginCount} >= ${MAX_FAILED_LOGINS}`))
+    .returning({ id: users.id })
+    .get();
+  return !!locked;
+}
+
+export function isLocked(u: Pick<UserRow, 'lockedUntil'>, now = Date.now()): boolean {
+  return !!u.lockedUntil && u.lockedUntil.getTime() > now;
 }
 
 export function findUserByLogin(db: Db, login: string): UserRow | undefined {

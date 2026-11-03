@@ -57,14 +57,22 @@ export function clearSessionCookie(app: FastifyInstance, reply: FastifyReply): v
   });
 }
 
-function originAllowed(req: FastifyRequest): boolean {
-  const origin = req.headers.origin;
-  if (!origin) return true;
-  try {
-    return new URL(origin).host === req.host;
-  } catch {
-    return false;
+/**
+ * Plan §5.5: unsafe requests must come from an allow-listed origin (DEVYARD_PUBLIC_ORIGINS, exact
+ * scheme + host + port). Falls back to Referer; rejects when both are missing or `Origin: null`.
+ */
+export function originAllowed(req: FastifyRequest, allowed: readonly string[]): boolean {
+  let origin = req.headers.origin;
+  if (!origin) {
+    const referer = req.headers.referer;
+    if (!referer) return false;
+    try {
+      origin = new URL(referer).origin;
+    } catch {
+      return false;
+    }
   }
+  return origin !== 'null' && allowed.includes(origin);
 }
 
 /**
@@ -83,7 +91,8 @@ export const authPlugin = fp(async (app: FastifyInstance) => {
 
     const cfg = req.routeOptions.config;
     if (UNSAFE.has(req.method)) {
-      if (!originAllowed(req)) throw new ApiError('CSRF_FAILED', 'Cross-site request rejected');
+      if (!originAllowed(req, app.config.publicOrigins))
+        throw new ApiError('CSRF_FAILED', 'Cross-site request rejected');
       if (cfg.csrf !== false && req.auth) {
         const provided = req.headers['x-csrf-token'];
         if (typeof provided !== 'string' || !csrfMatches(req.auth.session, provided))

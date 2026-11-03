@@ -7,7 +7,7 @@ import { sha256 } from '../../src/lib/crypto.js';
 import { issuePasswordResetToken, purgeExpired } from '../../src/modules/auth/service.js';
 import { buildApp } from '../../src/app.js';
 import { loadConfig } from '../../src/config/index.js';
-import { testApp } from '../helpers.js';
+import { TEST_ORIGIN, testApp, TRUST_LOCAL_PROXY, withDefaultOrigin } from '../helpers.js';
 import { ADMIN, bootstrap, freshIp, login, sessionCookie } from './fixtures.js';
 
 const me = (app: FastifyInstance, cookie: string) =>
@@ -15,7 +15,7 @@ const me = (app: FastifyInstance, cookie: string) =>
 
 describe('auth: bootstrap', () => {
   let app: FastifyInstance;
-  beforeEach(async () => (app = await testApp()));
+  beforeEach(async () => (app = await testApp(TRUST_LOCAL_PROXY)));
   afterEach(async () => app.close());
 
   it('reports required until the first user exists, then works only once', async () => {
@@ -64,7 +64,7 @@ describe('auth: bootstrap', () => {
 
 describe('auth: cookies and token storage', () => {
   let app: FastifyInstance;
-  beforeEach(async () => (app = await testApp()));
+  beforeEach(async () => (app = await testApp(TRUST_LOCAL_PROXY)));
   afterEach(async () => app.close());
 
   it('sets HttpOnly, SameSite=Lax, Path=/ and no Domain; not Secure in test', async () => {
@@ -84,8 +84,10 @@ describe('auth: cookies and token storage', () => {
         NODE_ENV: 'production',
         DEVYARD_DB_PATH: ':memory:',
         DEVYARD_LOG_LEVEL: 'silent',
+        DEVYARD_PUBLIC_ORIGINS: TEST_ORIGIN,
       }),
     );
+    withDefaultOrigin(prod);
     try {
       const res = await prod.inject({
         method: 'POST',
@@ -119,7 +121,7 @@ describe('auth: cookies and token storage', () => {
 describe('auth: login / me / logout', () => {
   let app: FastifyInstance;
   beforeEach(async () => {
-    app = await testApp();
+    app = await testApp(TRUST_LOCAL_PROXY);
     await bootstrap(app);
   });
   afterEach(async () => app.close());
@@ -195,7 +197,7 @@ describe('auth: login / me / logout', () => {
 describe('auth: session expiry and revocation', () => {
   let app: FastifyInstance;
   beforeEach(async () => {
-    app = await testApp();
+    app = await testApp(TRUST_LOCAL_PROXY);
     await bootstrap(app);
   });
   afterEach(async () => app.close());
@@ -285,7 +287,7 @@ describe('auth: session expiry and revocation', () => {
 describe('auth: CSRF', () => {
   let app: FastifyInstance;
   beforeEach(async () => {
-    app = await testApp();
+    app = await testApp(TRUST_LOCAL_PROXY);
     await bootstrap(app);
   });
   afterEach(async () => app.close());
@@ -311,29 +313,57 @@ describe('auth: CSRF', () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it('cross-site Origin on an unsafe request is rejected, even on login', async () => {
+  const loginWith = (headers: Record<string, string | null>) =>
+    app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { login: 'admin', password: ADMIN.password },
+      headers: { 'x-forwarded-for': freshIp(), ...headers },
+    });
+
+  it('unsafe requests need an allow-listed Origin (exact scheme, host and port), even on login', async () => {
+    for (const origin of [
+      'https://evil.example',
+      'https://localhost', // wrong scheme
+      'http://localhost:8080', // wrong port
+      'http://localhost.evil.example',
+      'null',
+    ]) {
+      const res = await loginWith({ origin });
+      expect(res.statusCode, origin).toBe(403);
+      expect(res.json().error.code).toBe('CSRF_FAILED');
+    }
+    expect((await loginWith({ origin: TEST_ORIGIN })).statusCode).toBe(200);
+  });
+
+  it('falls back to Referer when Origin is absent; rejects when both are missing', async () => {
+    expect(
+      (await loginWith({ origin: null, referer: `${TEST_ORIGIN}/login?x=1` })).statusCode,
+    ).toBe(200);
+    expect(
+      (await loginWith({ origin: null, referer: 'https://evil.example/login' })).statusCode,
+    ).toBe(403);
+    expect((await loginWith({ origin: null, referer: 'not a url' })).statusCode).toBe(403);
+    const none = await loginWith({ origin: null });
+    expect(none.statusCode).toBe(403);
+    expect(none.json().error.code).toBe('CSRF_FAILED');
+  });
+
+  it('safe methods do not need an Origin', async () => {
     const res = await app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/login',
-      payload: { login: 'admin', password: ADMIN.password },
-      headers: { origin: 'https://evil.example', host: 'devyard.local' },
+      method: 'GET',
+      url: '/api/v1/auth/bootstrap',
+      // testApp's inject wrapper treats `origin: null` as "send no Origin header"
+      headers: { origin: null } as unknown as Record<string, string>,
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json().error.code).toBe('CSRF_FAILED');
-    const ok = await app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/login',
-      payload: { login: 'admin', password: ADMIN.password },
-      headers: { origin: 'http://devyard.local', host: 'devyard.local' },
-    });
-    expect(ok.statusCode).toBe(200);
+    expect(res.statusCode).toBe(200);
   });
 });
 
 describe('auth: brute force', () => {
   let app: FastifyInstance;
   beforeEach(async () => {
-    app = await testApp();
+    app = await testApp(TRUST_LOCAL_PROXY);
     await bootstrap(app);
   });
   afterEach(async () => app.close());
@@ -380,7 +410,7 @@ describe('auth: brute force', () => {
 describe('auth: password change and reset', () => {
   let app: FastifyInstance;
   beforeEach(async () => {
-    app = await testApp();
+    app = await testApp(TRUST_LOCAL_PROXY);
     await bootstrap(app);
   });
   afterEach(async () => app.close());
@@ -441,5 +471,180 @@ describe('auth: password change and reset', () => {
       payload: { token, newPassword: 'reset password value' },
     });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('auth: proxy trust', () => {
+  it('without DEVYARD_TRUST_PROXY a spoofed X-Forwarded-For gets no new rate bucket', async () => {
+    const app = await testApp();
+    try {
+      await bootstrap(app);
+      for (let i = 0; i < 10; i++) {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/auth/login',
+          payload: { login: 'nobody', password: 'wrong password!!' },
+          headers: { 'x-forwarded-for': freshIp() },
+        });
+        expect(res.statusCode).toBe(401);
+      }
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { login: 'admin', password: ADMIN.password },
+        headers: { 'x-forwarded-for': freshIp() },
+      });
+      expect(res.statusCode).toBe(429);
+      const ips = app.db
+        .select({ ip: auditLogs.ip })
+        .from(auditLogs)
+        .where(eq(auditLogs.action, 'auth.login'))
+        .all();
+      expect(new Set(ips.map((r) => r.ip))).toEqual(new Set(['127.0.0.1']));
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('auth: hardening', () => {
+  let app: FastifyInstance;
+  beforeEach(async () => {
+    app = await testApp(TRUST_LOCAL_PROXY);
+    await bootstrap(app);
+  });
+  afterEach(async () => app.close());
+
+  const badLogin = () =>
+    app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { login: 'admin', password: 'definitely wrong' },
+      headers: { 'x-forwarded-for': freshIp() },
+    });
+
+  it('parallel bad logins: every failure is counted and the account locks exactly once', async () => {
+    const results = await Promise.all(Array.from({ length: 15 }, badLogin));
+    expect(results.every((r) => r.statusCode === 401)).toBe(true);
+    const u = app.db.select().from(users).get()!;
+    expect(u.lockedUntil!.getTime()).toBeGreaterThan(Date.now());
+    const locks = app.db.select().from(auditLogs).where(eq(auditLogs.action, 'auth.lockout')).all();
+    expect(locks).toHaveLength(1);
+  });
+
+  it('parallel failures below the threshold are not lost (atomic increment)', async () => {
+    await Promise.all(Array.from({ length: 7 }, badLogin));
+    expect(app.db.select().from(users).get()!.failedLoginCount).toBe(7);
+  });
+
+  it('disabled accounts do not accumulate lockout failures', async () => {
+    app.db.update(users).set({ status: 'disabled' }).run();
+    for (let i = 0; i < 3; i++) expect((await badLogin()).statusCode).toBe(401);
+    expect(app.db.select().from(users).get()!.failedLoginCount).toBe(0);
+  });
+
+  it('POST /auth/password: failures count toward lockout; 5/min per user', async () => {
+    const a = await login(app);
+    const change = (as: { cookie: string; csrf: string }) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/password',
+        payload: { currentPassword: 'wrong wrong wrong', newPassword: 'another password 1' },
+        headers: { cookie: as.cookie, 'x-csrf-token': as.csrf, 'x-forwarded-for': freshIp() },
+      });
+    for (let i = 0; i < 5; i++) expect((await change(a)).statusCode).toBe(400);
+    expect(app.db.select().from(users).get()!.failedLoginCount).toBe(5);
+    // 6th from the same user is limited, even from a fresh session and IP
+    const b = await login(app);
+    const res = await change(b);
+    expect(res.statusCode).toBe(429);
+    expect(res.json().error.code).toBe('RATE_LIMITED');
+  });
+
+  it('reset confirm: concurrent redemptions of one token → exactly one succeeds', async () => {
+    const userId = app.db.select().from(users).get()!.id;
+    const { token } = issuePasswordResetToken(app.db, userId, null);
+    const results = await Promise.all(
+      [1, 2, 3].map((n) =>
+        app.inject({
+          method: 'POST',
+          url: '/api/v1/auth/password-reset/confirm',
+          payload: { token, newPassword: `parallel password ${n}` },
+          headers: { 'x-forwarded-for': freshIp() },
+        }),
+      ),
+    );
+    expect(results.map((r) => r.statusCode).sort()).toEqual([204, 400, 400]);
+  });
+
+  it('reset confirm: an unknown token is rejected before the new password is hashed', async () => {
+    // With an impossible scrypt cost, any hashPassword call would throw (500). Validation must come first.
+    const { configureScrypt } = await import('../../src/lib/crypto.js');
+    configureScrypt({ N: 2 ** 22 });
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/password-reset/confirm',
+        payload: { token: 'x'.repeat(43), newPassword: 'reset password value' },
+      });
+      expect(res.statusCode).toBe(400);
+    } finally {
+      configureScrypt({ N: app.config.scryptN });
+    }
+  });
+
+  it('bootstrap is rate limited per IP', async () => {
+    const ip = freshIp();
+    const codes: number[] = [];
+    for (let i = 0; i < 6; i++)
+      codes.push(
+        (
+          await app.inject({
+            method: 'POST',
+            url: '/api/v1/auth/bootstrap',
+            payload: ADMIN,
+            headers: { 'x-forwarded-for': ip },
+          })
+        ).statusCode,
+      );
+    expect(codes).toEqual([409, 409, 409, 409, 409, 429]);
+  });
+});
+
+describe('config hardening', () => {
+  const prod = {
+    NODE_ENV: 'production',
+    DEVYARD_DB_PATH: ':memory:',
+    DEVYARD_PUBLIC_ORIGINS: 'https://devyard.example',
+  };
+  it('production refuses DEVYARD_COOKIE_SECURE=false', () => {
+    expect(() => loadConfig({ ...prod, DEVYARD_COOKIE_SECURE: 'false' })).toThrow(/COOKIE_SECURE/);
+    expect(loadConfig(prod).cookieSecure).toBe(true);
+  });
+  it('production requires DEVYARD_PUBLIC_ORIGINS; origins must be exact', () => {
+    expect(() => loadConfig({ ...prod, DEVYARD_PUBLIC_ORIGINS: '' })).toThrow(/PUBLIC_ORIGINS/);
+    expect(() =>
+      loadConfig({ ...prod, DEVYARD_PUBLIC_ORIGINS: 'https://x.example/app' }),
+    ).toThrow();
+    expect(() => loadConfig({ ...prod, DEVYARD_PUBLIC_ORIGINS: 'ftp://x.example' })).toThrow();
+    expect(
+      loadConfig({ ...prod, DEVYARD_PUBLIC_ORIGINS: 'https://a.example, https://b.example:8443' })
+        .publicOrigins,
+    ).toEqual(['https://a.example', 'https://b.example:8443']);
+  });
+  it('DEVYARD_TRUST_PROXY is off by default and accepts IPs/CIDRs only', () => {
+    expect(loadConfig(prod).trustProxy).toBe(false);
+    expect(
+      loadConfig({ ...prod, DEVYARD_TRUST_PROXY: '127.0.0.1, 10.0.0.0/8, ::1' }).trustProxy,
+    ).toEqual(['127.0.0.1', '10.0.0.0/8', '::1']);
+    expect(() => loadConfig({ ...prod, DEVYARD_TRUST_PROXY: 'true' })).toThrow(/TRUST_PROXY/);
+    expect(() => loadConfig({ ...prod, DEVYARD_TRUST_PROXY: '10.0.0.0/99' })).toThrow();
+  });
+  it('DEVYARD_SCRYPT_N is honoured only when NODE_ENV=test', () => {
+    expect(loadConfig({ ...prod, DEVYARD_SCRYPT_N: '1024' }).scryptN).toBeUndefined();
+    expect(
+      loadConfig({ NODE_ENV: 'development', DEVYARD_SCRYPT_N: '1024' }).scryptN,
+    ).toBeUndefined();
+    expect(loadConfig({ NODE_ENV: 'test', DEVYARD_SCRYPT_N: '1024' }).scryptN).toBe(1024);
   });
 });

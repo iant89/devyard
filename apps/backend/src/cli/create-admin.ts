@@ -28,7 +28,10 @@ export async function createAdmin(
       .from(users)
       .where(or(eq(users.username, body.username), eq(users.email, body.email)))
       .get();
-    if (clash) throw new Error('A user with that username or email already exists');
+    if (clash)
+      throw new Error(
+        'A user with that username or email already exists (soft-deleted users keep their username and email reserved)',
+      );
     const id = newId();
     tx.insert(users)
       .values({
