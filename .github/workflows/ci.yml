@@ -37,3 +37,7 @@ jobs:
       - run: npm run test:e2e -w @devyard/frontend
         env:
           CI: 'true'
+      - name: Smoke test against the real backend
+        run: npm run test:smoke -w @devyard/frontend
+        env:
+          CI: 'true'
