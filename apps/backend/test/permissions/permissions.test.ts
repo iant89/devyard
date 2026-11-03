@@ -10,7 +10,7 @@ import {
   type Principal,
 } from '../../src/modules/permissions/service.js';
 
-import { testApp } from '../helpers.js';
+import { testApp, TRUST_LOCAL_PROXY } from '../helpers.js';
 import { setupActors, type Actors } from '../users/fixtures.js';
 
 const principal = (roles: string[], permissions: string[]): Principal => ({
@@ -33,10 +33,13 @@ describe('permissions: requireProjectRole / effectiveProjectRole', () => {
   let a: Actors;
   let projectId: string;
   beforeAll(async () => {
-    app = await testApp();
+    app = await testApp(TRUST_LOCAL_PROXY);
     a = await setupActors(app);
     projectId = newId();
-    app.db.insert(projects).values({ id: projectId, slug: 'p', name: 'P', ownerId: a.ids.developer }).run();
+    app.db
+      .insert(projects)
+      .values({ id: projectId, slug: 'p', name: 'P', ownerId: a.ids.developer })
+      .run();
     app.db
       .insert(projectMembers)
       .values([
@@ -49,7 +52,8 @@ describe('permissions: requireProjectRole / effectiveProjectRole', () => {
   afterAll(async () => app.close());
 
   const p = (who: keyof Actors['ids']) => {
-    const u = { admin: a.admin, developer: a.developer, viewer: a.viewer }[who].body.data.user as unknown as Principal;
+    const u = { admin: a.admin, developer: a.developer, viewer: a.viewer }[who].body.data
+      .user as unknown as Principal;
     return u;
   };
 
@@ -89,7 +93,10 @@ describe('permissions: requireProjectRole / effectiveProjectRole', () => {
       .insert(projects)
       .values({ id: pid, slug: 'gone', name: 'G', ownerId: a.ids.developer, deletedAt: new Date() })
       .run();
-    app.db.insert(projectMembers).values({ projectId: pid, userId: a.ids.developer, role: 'owner' }).run();
+    app.db
+      .insert(projectMembers)
+      .values({ projectId: pid, userId: a.ids.developer, role: 'owner' })
+      .run();
     expect(effectiveProjectRole(app.db, p('developer'), pid)).toBeNull();
   });
 });

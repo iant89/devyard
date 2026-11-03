@@ -14,11 +14,7 @@ import { hashPassword } from '../../lib/crypto.js';
 import { ApiError } from '../../lib/errors.js';
 import { newId } from '../../lib/ids.js';
 import { writeAudit } from '../audit/service.js';
-import {
-  issuePasswordResetToken,
-  revokeUserSessions,
-  toPublicUser,
-} from '../auth/service.js';
+import { issuePasswordResetToken, revokeUserSessions, toPublicUser } from '../auth/service.js';
 import { can, requirePermission } from '../permissions/service.js';
 import {
   assertNotLastAdmin,
@@ -76,7 +72,12 @@ export const usersRoutes: FastifyPluginAsync = async (app) => {
     }
     const where = and(...conds);
     const order = parseSort(q.sort);
-    const total = db.select({ n: sql<number>`count(*)` }).from(users).where(where).get()?.n ?? 0;
+    const total =
+      db
+        .select({ n: sql<number>`count(*)` })
+        .from(users)
+        .where(where)
+        .get()?.n ?? 0;
     const rows = db
       .select()
       .from(users)
@@ -243,7 +244,11 @@ export const usersRoutes: FastifyPluginAsync = async (app) => {
       requireLiveUser(db, id);
       const where = eq(auditLogs.actorId, id);
       const total =
-        db.select({ n: sql<number>`count(*)` }).from(auditLogs).where(where).get()?.n ?? 0;
+        db
+          .select({ n: sql<number>`count(*)` })
+          .from(auditLogs)
+          .where(where)
+          .get()?.n ?? 0;
       const rows = db
         .select()
         .from(auditLogs)
@@ -255,5 +260,4 @@ export const usersRoutes: FastifyPluginAsync = async (app) => {
       return { data: rows.map(toAuditEntry), meta: { page: q.page, pageSize: q.pageSize, total } };
     },
   );
-
 };

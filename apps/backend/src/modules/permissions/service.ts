@@ -36,11 +36,7 @@ export function isGlobalViewerOnly(p: Principal): boolean {
  * (or the project doesn't exist / is soft-deleted). Admins with `projects.manage_all` act as owner;
  * `projects.read_all` grants at least viewer.
  */
-export function effectiveProjectRole(
-  db: Db,
-  p: Principal,
-  projectId: string,
-): ProjectRole | null {
+export function effectiveProjectRole(db: Db, p: Principal, projectId: string): ProjectRole | null {
   const project = db
     .select({ id: projects.id })
     .from(projects)

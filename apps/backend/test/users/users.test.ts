@@ -3,19 +3,18 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from 'vitest';
 import { projects } from '../../src/db/schema.js';
 import { newId } from '../../src/lib/ids.js';
-import { testApp } from '../helpers.js';
+import { testApp, TRUST_LOCAL_PROXY } from '../helpers.js';
 import { freshIp, login } from '../auth/fixtures.js';
 import { call, createUser, PW, setupActors, type Actors } from './fixtures.js';
 
 type Role = 'admin' | 'developer' | 'viewer';
-const ROLES: Role[] = ['admin', 'developer', 'viewer'];
 
 describe('users: permission matrix (admin/developer/viewer × endpoint)', () => {
   let app: FastifyInstance;
   let a: Actors;
   let target: string;
   beforeAll(async () => {
-    app = await testApp();
+    app = await testApp(TRUST_LOCAL_PROXY);
     a = await setupActors(app);
     target = await createUser(app, a.admin, 'target', ['developer']);
   });
@@ -67,7 +66,7 @@ describe('users: behaviour', () => {
   let app: FastifyInstance;
   let a: Actors;
   beforeEach(async () => {
-    app = await testApp();
+    app = await testApp(TRUST_LOCAL_PROXY);
     a = await setupActors(app);
   });
   afterEach(async () => app.close());
@@ -124,7 +123,10 @@ describe('users: behaviour', () => {
 
   it('self may change only displayName/email', async () => {
     const url = `/api/v1/users/${a.ids.developer}`;
-    let res = await call(app, a.developer, 'PATCH', url, { displayName: 'Dev 2', email: 'd2@example.com' });
+    let res = await call(app, a.developer, 'PATCH', url, {
+      displayName: 'Dev 2',
+      email: 'd2@example.com',
+    });
     expect(res.statusCode).toBe(200);
     expect(res.json().data).toMatchObject({ displayName: 'Dev 2', email: 'd2@example.com' });
     res = await call(app, a.developer, 'PATCH', url, { roles: ['admin'] });
@@ -137,12 +139,17 @@ describe('users: behaviour', () => {
 
   it('role change takes effect on the next request', async () => {
     await call(app, a.admin, 'PATCH', `/api/v1/users/${a.ids.viewer}`, { roles: ['admin'] });
-    const res = await call(app, a.viewer, 'POST', `/api/v1/users/${a.ids.developer}/password-reset`);
+    const res = await call(
+      app,
+      a.viewer,
+      'POST',
+      `/api/v1/users/${a.ids.developer}/password-reset`,
+    );
     expect(res.statusCode).toBe(201);
   });
 
   it('disable revokes sessions; re-enable allows login again', async () => {
-    let res = await call(app, a.admin, 'PATCH', `/api/v1/users/${a.ids.developer}`, {
+    const res = await call(app, a.admin, 'PATCH', `/api/v1/users/${a.ids.developer}`, {
       status: 'disabled',
     });
     expect(res.statusCode).toBe(200);
@@ -199,7 +206,9 @@ describe('users: behaviour', () => {
     expect((await call(app, a.admin, 'GET', `/api/v1/users/${a.ids.viewer}`)).statusCode).toBe(404);
     const list = await call(app, a.admin, 'GET', '/api/v1/users');
     expect(list.json().meta.total).toBe(2);
-    expect((await call(app, a.admin, 'DELETE', `/api/v1/users/${a.ids.viewer}`)).statusCode).toBe(404);
+    expect((await call(app, a.admin, 'DELETE', `/api/v1/users/${a.ids.viewer}`)).statusCode).toBe(
+      404,
+    );
   });
 
   it('password reset issues a single-use token the user can redeem', async () => {
@@ -223,7 +232,13 @@ describe('users: behaviour', () => {
       ['POST', '/password-reset'],
       ['GET', '/activity'],
     ] as const) {
-      const res = await call(app, a.admin, m, `/api/v1/users/nope${p}`, m === 'PATCH' ? { displayName: 'x' } : undefined);
+      const res = await call(
+        app,
+        a.admin,
+        m,
+        `/api/v1/users/nope${p}`,
+        m === 'PATCH' ? { displayName: 'x' } : undefined,
+      );
       expect(res.statusCode, `${m} ${p}`).toBe(404);
     }
   });
@@ -246,6 +261,11 @@ describe('users: behaviour', () => {
     const ids1 = p1.json().data.map((e: { id: string }) => e.id);
     const ids2 = p2.json().data.map((e: { id: string }) => e.id);
     expect(ids1.filter((id: string) => ids2.includes(id))).toEqual([]);
-    expect(all.json().data.slice(3, 6).map((e: { id: string }) => e.id)).toEqual(ids2);
+    expect(
+      all
+        .json()
+        .data.slice(3, 6)
+        .map((e: { id: string }) => e.id),
+    ).toEqual(ids2);
   });
 });

@@ -55,4 +55,10 @@ export const AuditEntry = z.object({
 export type AuditEntry = z.infer<typeof AuditEntry>;
 
 /** Sortable fields for GET /users (`field` or `-field`). */
-export const USER_SORT_FIELDS = ['username', 'displayName', 'email', 'createdAt', 'lastLoginAt'] as const;
+export const USER_SORT_FIELDS = [
+  'username',
+  'displayName',
+  'email',
+  'createdAt',
+  'lastLoginAt',
+] as const;

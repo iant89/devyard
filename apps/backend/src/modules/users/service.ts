@@ -1,7 +1,8 @@
 import type { AuditEntry, PublicUser, RoleName, UserSummary } from '@devyard/contracts';
 import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client.js';
-import { auditLogs, projects, userRoles, users } from '../../db/schema.js';
+import type { auditLogs } from '../../db/schema.js';
+import { projects, userRoles, users } from '../../db/schema.js';
 import { ApiError } from '../../lib/errors.js';
 import type { UserRow } from '../auth/service.js';
 
@@ -121,4 +122,3 @@ export function toAuditEntry(r: typeof auditLogs.$inferSelect): AuditEntry {
 export function userIdsWithRole(db: Pick<Db, 'select'>, role: RoleName) {
   return db.select({ id: userRoles.userId }).from(userRoles).where(eq(userRoles.roleId, role));
 }
-

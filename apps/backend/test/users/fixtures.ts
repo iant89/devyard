@@ -20,7 +20,13 @@ export async function createUser(
     method: 'POST',
     url: '/api/v1/users',
     headers: { cookie: as.cookie, 'x-csrf-token': as.csrf },
-    payload: { username, email: `${username}@example.com`, displayName: username, password: PW, roles },
+    payload: {
+      username,
+      email: `${username}@example.com`,
+      displayName: username,
+      password: PW,
+      roles,
+    },
   });
   if (res.statusCode !== 201) throw new Error(`create ${username}: ${res.statusCode} ${res.body}`);
   return res.json().data.id;
