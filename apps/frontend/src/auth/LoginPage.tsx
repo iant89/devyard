@@ -63,16 +63,12 @@ export function LoginPage({ expired = false }: { expired?: boolean }) {
 
   return (
     <AuthLayout>
-      <Card
-        className="dy-auth__card"
-        header={
-          <Title level={2} size="xl">
-            Sign in
-          </Title>
-        }
-      >
+      <Card className="dy-auth__card">
         <Form onSubmit={onSubmit} noValidate aria-label="Sign in">
           <Stack gap={5}>
+            <Title level={2} size="xl">
+              Sign in
+            </Title>
             {failure && (
               <MessageStrip tone="error" title={failure.title} announce="assertive">
                 {failure.body}

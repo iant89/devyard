@@ -83,16 +83,12 @@ export function BootstrapPage() {
 
   return (
     <AuthLayout>
-      <Card
-        className="dy-auth__card"
-        header={
-          <Title level={2} size="xl">
-            Set up Devyard
-          </Title>
-        }
-      >
+      <Card className="dy-auth__card">
         <Form onSubmit={onSubmit} noValidate aria-label="Create the first administrator">
           <Stack gap={5}>
+            <Title level={2} size="xl">
+              Set up Devyard
+            </Title>
             <Text as="p" size="sm" tone="secondary">
               No accounts exist yet. Create the first administrator for this instance.
             </Text>
