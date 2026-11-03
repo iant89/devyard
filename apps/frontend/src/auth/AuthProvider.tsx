@@ -54,9 +54,10 @@ export function AuthProvider({
 
   useEffect(
     () =>
-      api.onUnauthenticated(() =>
-        setStatus((s) => (s.kind === 'authenticated' ? { kind: 'anonymous', expired: true } : s)),
-      ),
+      api.onUnauthenticated(() => {
+        api.setCsrfToken(null);
+        setStatus((s) => (s.kind === 'authenticated' ? { kind: 'anonymous', expired: true } : s));
+      }),
     [api],
   );
 
