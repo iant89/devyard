@@ -397,7 +397,19 @@ Notes (Tech Lead rulings on PR #4):
 | DELETE | `/:id/members/:userId` | maintainer, or self (leave)                    | –                                                                                                 | 204. The owner can't be removed                                              |
 | POST   | `/:id/transfer`        | owner                                          | `{newOwnerId}`                                                                                    | `{data: Project}`. The previous owner becomes maintainer                     |
 
-`Project = {id, slug, name, description, ownerId, projectType, primaryLanguage|null, framework|null, archived, myRole, createdAt, updatedAt}`.
+`Project = {id, slug, name, description, ownerId, projectType, primaryLanguage|null, framework|null, archived, myRole|null, access: 'member'|'admin', createdAt, updatedAt}`. Member writes return `ProjectMemberWrite = ProjectMember & {roleCapped: boolean}`.
+
+Implementation notes (B4):
+
+- **`myRole` / `access`:** members get their membership role (Viewer cap applied) and `access: 'member'`. A non-member who sees the project only through admin permissions gets `myRole: null, access: 'admin'` and is never reported as owner. Authorization still treats `projects.manage_all` as owner-level.
+- **Transfer:** the new owner may be a non-member, in which case they are added as the `owner` member automatically. The previous owner becomes `maintainer`. The `project.transfer` audit entry records `from`, `to` and `addedAsMember`.
+- **Access:** every `:id` route goes through `requireProjectRole()`. Non-members, unknown ids and soft-deleted projects all return the same `404 NOT_FOUND`. A visible project with too low a role returns `403`. For authorization, admins (`projects.manage_all`) act as `owner` and `projects.read_all` gives at least `viewer`.
+- **Viewer cap on write (acceptance criterion):** when a member is added or changed, a global Viewer (no admin or developer role) is stored as `viewer` whatever role was requested. The response returns the effective role (`viewer`) plus `roleCapped: true` (otherwise `false`), and the audit entry records `requestedRole`, `role` and `capped: true`. Global Viewers also can't receive ownership through a transfer (400). The cap still applies on read.
+- **Maintainers:** only the owner can add, promote, demote or remove maintainers. Maintainers manage `developer` and `viewer` members. Anyone can leave (`DELETE /:id/members/<self>`) except the owner, whose role changes only through `/transfer`.
+- **Slugs:** derived from `name` when omitted (`my-app`, then `my-app-2` and so on). An explicit slug that clashes returns 409. **Slugs stay reserved after a soft delete** (the unique index covers deleted rows) for the MVP, the same rule as for usernames. Freeing them needs the later hard-purge action (D7).
+- **Templates:** only `empty` is accepted in Phase 1. Other `ProjectTemplate` values return `400 VALIDATION_FAILED` with the message "Template '<name>' is not supported yet; only 'empty' is available in Phase 1" (`details[0].path = template`) until Phases 2–4 implement them.
+- **List:** `scope=all` means every project the caller can see (all of them for `read_all`/`manage_all`). `mine` is projects the caller owns, and `shared` is projects they are a member of but don't own. `archived` takes `false` (the default: non-archived only), `true` (archived only) or `all` (both). Any other value → 400. The sort allow-list is `name`, `slug`, `createdAt`, `updatedAt` (default `-updatedAt`). `q` matches name, slug and description, with LIKE wildcards escaped.
+- **Audit actions:** `project.create`, `project.update`, `project.archive`, `project.unarchive`, `project.delete`, `project.member_add`, `project.member_update`, `project.member_remove`, `project.member_leave`, `project.transfer` (§21.2 "project sharing").
 
 Health: `GET /api/v1/health` → `{status:'ok', version, db:'ok'|'error'}`. Already implemented.
 
