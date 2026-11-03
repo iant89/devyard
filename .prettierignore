@@ -1,0 +1,6 @@
+dist
+node_modules
+coverage
+apps/backend/drizzle
+package-lock.json
+README.md

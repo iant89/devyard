@@ -1,0 +1,32 @@
+{
+  "name": "@devyard/backend",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Devyard control-plane API (Fastify modular monolith, SQLite + Drizzle).",
+  "type": "module",
+  "main": "./dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/migrate.ts"
+  },
+  "dependencies": {
+    "@devyard/contracts": "0.0.0",
+    "@fastify/cookie": "^11.1.0",
+    "@fastify/helmet": "^13.0.0",
+    "@fastify/rate-limit": "^11.2.0",
+    "better-sqlite3": "^12.0.0",
+    "drizzle-orm": "^0.45.0",
+    "fastify": "^5.6.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "drizzle-kit": "^0.31.0",
+    "tsx": "^4.20.0"
+  }
+}
