@@ -38,8 +38,8 @@ Types: `feat`, `fix`, `docs`, `chore`, `ci`, `refactor`, `test`, `perf`, `build`
   ```
 - **Required before merge:**
   - CI (`check` workflow: typecheck, lint, format, tests, audit) is green.
-  - Code review approved by the **Tech Lead**.
-  - Integration/repo-health review by the **Repository Maintainer**: no secrets, no generated or oversized files, sane lockfile, migrations included.
+  - Code review approved by the **Tech Lead** (PR comment).
+  - Integration/repo-health approval by the **Repository Maintainer** (PR comment): no secrets, no generated or oversized files, sane lockfile, migrations included.
 - **Merge method:** squash merge by default. Use a merge commit only for `release/` branches when individual commits must be kept.
 - Never commit `.env` files, databases, `node_modules`, `dist`, or credentials. Use `.env.example` for configuration keys.
 
@@ -53,13 +53,13 @@ Types: `feat`, `fix`, `docs`, `chore`, `ci`, `refactor`, `test`, `perf`, `build`
 
 Ian approved these rules for `main`, and they are now in effect:
 
-- Pull request required, with **1 approving review**.
+- Pull request required. **0 required GitHub approvals**.
 - Required status check: `check` (CI workflow), **strict**: the branch must be up to date with `main`.
 - **Enforced for admins** (`enforce_admins: true`).
 - Force-pushes blocked, branch deletion blocked. No push restrictions on specific users.
 
-### Approval flow
+### Review and merge flow
 
-- PRs are authored as `iant89`, and GitHub won't let an author approve their own PR.
-- Approvals come from **Ian's second GitHub account**. That account must be a repo collaborator with **write** access, or its approval doesn't count.
-- Once that approval is in and CI is green, the **Repository Maintainer** merges, squashing by default.
+- The **Tech Lead** reviews the code and approves it in a PR comment.
+- The **Repository Maintainer** reviews integration and repo health (secrets, generated files, lockfile, migrations) and approves in a PR comment.
+- Once both approvals are posted and CI `check` is green, the Maintainer squash-merges.
