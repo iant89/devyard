@@ -1,4 +1,4 @@
-import { Project, ProjectMember } from '@devyard/contracts';
+import { Project, ProjectMember, ProjectMemberWrite } from '@devyard/contracts';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -54,9 +54,13 @@ describe('projects', () => {
 
   it('create: global Viewer cannot create (403); unimplemented templates are rejected (400)', async () => {
     expect((await call(app, a.viewer, 'POST', P, { name: 'v' })).statusCode).toBe(403);
-    expect(
-      (await call(app, a.developer, 'POST', P, { name: 'r', template: 'react' })).statusCode,
-    ).toBe(400);
+    const bad = await call(app, a.developer, 'POST', P, { name: 'r', template: 'react' });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error).toMatchObject({
+      code: 'VALIDATION_FAILED',
+      message: "Template 'react' is not supported yet; only 'empty' is available in Phase 1",
+      details: [{ path: 'template', message: "Unsupported template 'react'. Use 'empty'." }],
+    });
   });
 
   it("two-user isolation: B gets 404 on A's project until shared", async () => {
@@ -111,12 +115,27 @@ describe('projects', () => {
     const p = await create(a.developer, 'Cap');
     const add = await share(a.developer, p.id, a.ids.viewer, 'maintainer');
     expect(add.statusCode).toBe(201);
-    expect(ProjectMember.parse(add.json().data).role).toBe('viewer');
+    expect(ProjectMemberWrite.parse(add.json().data)).toMatchObject({
+      role: 'viewer',
+      roleCapped: true,
+    });
     const upd = await call(app, a.developer, 'PATCH', `${P}/${p.id}/members/${a.ids.viewer}`, {
       role: 'developer',
     });
     expect(upd.statusCode).toBe(200);
-    expect(upd.json().data.role).toBe('viewer');
+    expect(upd.json().data).toMatchObject({ role: 'viewer', roleCapped: true });
+    const updAudit = app.db
+      .select()
+      .from(auditLogs)
+      .where(eq(auditLogs.action, 'project.member_update'))
+      .get()!;
+    expect(updAudit.metadata).toMatchObject({
+      requestedRole: 'developer',
+      role: 'viewer',
+      capped: true,
+    });
+    const ok = await share(a.developer, p.id, devBId, 'developer');
+    expect(ok.json().data).toMatchObject({ role: 'developer', roleCapped: false });
     const stored = app.db
       .select()
       .from(projectMembers)
@@ -217,12 +236,17 @@ describe('projects', () => {
     expect((await call(app, a.developer, 'GET', P)).json().meta.total).toBe(0);
     expect((await call(app, a.developer, 'GET', `${P}?archived=true`)).json().meta.total).toBe(1);
     expect((await call(app, a.developer, 'GET', `${P}?archived=false`)).json().meta.total).toBe(0);
+    const live = await create(a.developer, 'Live one');
+    expect((await call(app, a.developer, 'GET', P)).json().meta.total).toBe(1);
+    expect((await call(app, a.developer, 'GET', `${P}?archived=all`)).json().meta.total).toBe(2);
+    expect((await call(app, a.developer, 'GET', `${P}?archived=maybe`)).statusCode).toBe(400);
     res = await call(app, devB, 'PATCH', `${P}/${p.id}`, { archived: false });
     expect(res.json().data.archived).toBe(false);
     expect((await call(app, devB, 'DELETE', `${P}/${p.id}`)).statusCode).toBe(403);
     expect((await call(app, a.developer, 'DELETE', `${P}/${p.id}`)).statusCode).toBe(204);
     expect((await call(app, a.developer, 'GET', `${P}/${p.id}`)).statusCode).toBe(404);
     expect((await call(app, a.admin, 'GET', `${P}/${p.id}`)).statusCode).toBe(404);
+    expect((await call(app, a.developer, 'DELETE', `${P}/${live.id}`)).statusCode).toBe(204);
     // the owner can now be deleted (no live projects)
     expect(
       (await call(app, a.admin, 'DELETE', `/api/v1/users/${a.ids.developer}`)).statusCode,
@@ -276,5 +300,46 @@ describe('projects', () => {
     const add = rows.find((r) => r.action === 'project.member_add')!;
     expect(add).toMatchObject({ actorId: a.ids.developer, outcome: 'success' });
     expect(add.metadata).toMatchObject({ userId: devBId, role: 'developer' });
+  });
+
+  it('transfer to a non-member adds them as owner member; previous owner becomes maintainer; audited', async () => {
+    const p = await create(a.developer, 'Handoff');
+    const res = await call(app, a.developer, 'POST', `${P}/${p.id}/transfer`, {
+      newOwnerId: devBId,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toMatchObject({
+      ownerId: devBId,
+      myRole: 'maintainer',
+      access: 'member',
+    });
+    const got = await call(app, devB, 'GET', `${P}/${p.id}`);
+    expect(got.json().data).toMatchObject({ myRole: 'owner', access: 'member' });
+    const members = (await call(app, devB, 'GET', `${P}/${p.id}/members`)).json().data;
+    const roles = Object.fromEntries(members.map((m: ProjectMember) => [m.userId, m.role]));
+    expect(roles).toEqual({ [a.ids.developer]: 'maintainer', [devBId]: 'owner' });
+    const t = app.db
+      .select()
+      .from(auditLogs)
+      .where(eq(auditLogs.action, 'project.transfer'))
+      .get()!;
+    expect(t).toMatchObject({ actorId: a.ids.developer, targetId: p.id, outcome: 'success' });
+    expect(t.metadata).toMatchObject({ from: a.ids.developer, to: devBId, addedAsMember: true });
+  });
+
+  it('a non-member admin sees myRole: null and access: admin (but can still manage)', async () => {
+    const p = await create(a.developer, 'Admin view');
+    const got = await call(app, a.admin, 'GET', `${P}/${p.id}`);
+    expect(got.statusCode).toBe(200);
+    expect(Project.parse(got.json().data)).toMatchObject({ myRole: null, access: 'admin' });
+    const list = (await call(app, a.admin, 'GET', P)).json().data;
+    expect(list[0]).toMatchObject({ myRole: null, access: 'admin' });
+    expect(
+      (await call(app, a.admin, 'PATCH', `${P}/${p.id}`, { name: 'by admin' })).statusCode,
+    ).toBe(200);
+    await share(a.developer, p.id, a.ids.admin, 'developer');
+    const mine = await call(app, a.admin, 'GET', `${P}/${p.id}`);
+    expect(mine.json().data).toMatchObject({ myRole: 'developer', access: 'member' });
+    expect((await call(app, a.developer, 'GET', `${P}/${p.id}`)).json().data.access).toBe('member');
   });
 });

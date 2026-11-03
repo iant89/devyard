@@ -16,13 +16,13 @@ import { newId } from '../../lib/ids.js';
 import { writeAudit } from '../audit/service.js';
 import {
   can,
-  effectiveProjectRole,
   PROJECT_ROLE_RANK,
   requireProjectRole,
   type Principal,
 } from '../permissions/service.js';
 import { findLiveUser } from '../users/service.js';
 import {
+  callerView,
   capRoleForUser,
   findLiveProject,
   isGlobalViewer,
@@ -79,7 +79,7 @@ export const projectsRoutes: FastifyPluginAsync = async (app) => {
     });
   const respond = (p: Principal, projectId: string) => {
     const row = findLiveProject(db, projectId)!;
-    return { data: toProject(row, effectiveProjectRole(db, p, projectId) ?? 'viewer') };
+    return { data: toProject(row, callerView(db, p, projectId)) };
   };
 
   app.get('/', { config: { auth: true } }, async (req) => {
@@ -96,7 +96,8 @@ export const projectsRoutes: FastifyPluginAsync = async (app) => {
     if (q.scope === 'mine') conds.push(eq(projects.ownerId, p.id));
     else if (q.scope === 'shared') conds.push(isMember, ne(projects.ownerId, p.id));
     else if (!seesAll) conds.push(isMember);
-    conds.push(q.archived ? isNotNull(projects.archivedAt) : isNull(projects.archivedAt));
+    if (q.archived === 'true') conds.push(isNotNull(projects.archivedAt));
+    else if (q.archived === 'false') conds.push(isNull(projects.archivedAt));
     if (q.q) {
       const pat = `%${escapeLike(q.q.toLowerCase())}%`;
       conds.push(
@@ -123,7 +124,7 @@ export const projectsRoutes: FastifyPluginAsync = async (app) => {
       .offset((q.page - 1) * q.pageSize)
       .all();
     return {
-      data: rows.map((r) => toProject(r, effectiveProjectRole(db, p, r.id) ?? 'viewer')),
+      data: rows.map((r) => toProject(r, callerView(db, p, r.id))),
       meta: { page: q.page, pageSize: q.pageSize, total },
     };
   });
@@ -131,9 +132,11 @@ export const projectsRoutes: FastifyPluginAsync = async (app) => {
   app.post('/', { config: { permission: 'projects.create' } }, async (req, reply) => {
     const body = CreateProjectRequest.parse(req.body);
     if (body.template !== 'empty')
-      throw new ApiError('VALIDATION_FAILED', 'Request validation failed', [
-        { path: 'template', message: "Only the 'empty' template is available in this release" },
-      ]);
+      throw new ApiError(
+        'VALIDATION_FAILED',
+        `Template '${body.template}' is not supported yet; only 'empty' is available in Phase 1`,
+        [{ path: 'template', message: `Unsupported template '${body.template}'. Use 'empty'.` }],
+      );
     const p = me(req);
     const id = newId();
     db.transaction((tx) => {
@@ -224,7 +227,7 @@ export const projectsRoutes: FastifyPluginAsync = async (app) => {
       ...(capped ? { requestedRole: body.role, capped } : {}),
     });
     const m = listMembers(db, id).find((x) => x.userId === body.userId)!;
-    return reply.status(201).send({ data: m });
+    return reply.status(201).send({ data: { ...m, roleCapped: capped } });
   });
 
   app.patch('/:id/members/:userId', { config: { auth: true } }, async (req) => {
@@ -248,7 +251,9 @@ export const projectsRoutes: FastifyPluginAsync = async (app) => {
       role,
       ...(capped ? { requestedRole: body.role, capped } : {}),
     });
-    return { data: listMembers(db, id).find((x) => x.userId === userId)! };
+    return {
+      data: { ...listMembers(db, id).find((x) => x.userId === userId)!, roleCapped: capped },
+    };
   });
 
   app.delete('/:id/members/:userId', { config: { auth: true } }, async (req, reply) => {
@@ -287,6 +292,7 @@ export const projectsRoutes: FastifyPluginAsync = async (app) => {
     if (isGlobalViewer(db, newOwnerId)) throw invalid('Global viewers cannot own projects');
     if (newOwnerId === project.ownerId) throw invalid('That user already owns the project');
     const prevOwner = project.ownerId;
+    const addedAsMember = !memberRow(db, id, newOwnerId);
     db.transaction((tx) => {
       const now = new Date();
       tx.update(projects)
@@ -305,7 +311,7 @@ export const projectsRoutes: FastifyPluginAsync = async (app) => {
         .where(and(eq(projectMembers.projectId, id), eq(projectMembers.userId, prevOwner)))
         .run();
     });
-    audit(req, 'project.transfer', id, { from: prevOwner, to: newOwnerId });
+    audit(req, 'project.transfer', id, { from: prevOwner, to: newOwnerId, addedAsMember });
     return respond(me(req), id);
   });
 };

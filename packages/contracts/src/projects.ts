@@ -32,7 +32,10 @@ export const Project = z.object({
   primaryLanguage: z.string().nullable(),
   framework: z.string().nullable(),
   archived: z.boolean(),
-  myRole: ProjectMemberRole,
+  /** The caller's membership role (Viewer cap applied); null when they see it only as an admin. */
+  myRole: ProjectMemberRole.nullable(),
+  /** How the caller can see the project: through membership, or through admin permissions. */
+  access: z.enum(['member', 'admin']),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -63,10 +66,7 @@ export type UpdateProjectRequest = z.infer<typeof UpdateProjectRequest>;
 export const ProjectListQuery = PageQuery.extend({
   scope: z.enum(['all', 'mine', 'shared']).default('all'),
   // Not z.coerce.boolean(): that turns the query string "false" into true.
-  archived: z
-    .enum(['true', 'false'])
-    .transform((v) => v === 'true')
-    .optional(),
+  archived: z.enum(['true', 'false', 'all']).default('false'),
 });
 
 export const ProjectMember = z.object({
@@ -77,6 +77,10 @@ export const ProjectMember = z.object({
   addedAt: IsoDateTime,
 });
 export type ProjectMember = z.infer<typeof ProjectMember>;
+
+/** Response of POST/PATCH members: `roleCapped` is true when a global Viewer's requested role was lowered to `viewer`. */
+export const ProjectMemberWrite = ProjectMember.extend({ roleCapped: z.boolean() });
+export type ProjectMemberWrite = z.infer<typeof ProjectMemberWrite>;
 
 export const AddProjectMemberRequest = z.object({
   userId: Id,

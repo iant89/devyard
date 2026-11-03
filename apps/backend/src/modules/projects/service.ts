@@ -7,7 +7,25 @@ import { isGlobalViewerOnly, type Principal, type ProjectRole } from '../permiss
 
 export type ProjectRow = typeof projects.$inferSelect;
 
-export function toProject(p: ProjectRow, myRole: ProjectRole): Project {
+/**
+ * What `Project.myRole` / `access` report for the caller (Tech Lead ruling 6): the member role with
+ * the Viewer cap applied, or `myRole: null, access: 'admin'` for a non-member who sees the project
+ * through `projects.read_all` / `projects.manage_all`. Authorization still uses effectiveProjectRole.
+ */
+export function callerView(
+  db: Pick<Db, 'select'>,
+  p: Principal,
+  projectId: string,
+): { myRole: ProjectRole | null; access: 'member' | 'admin' } {
+  const m = memberRow(db, projectId, p.id);
+  if (!m) return { myRole: null, access: 'admin' };
+  return { myRole: isGlobalViewerOnly(p) ? 'viewer' : m.role, access: 'member' };
+}
+
+export function toProject(
+  p: ProjectRow,
+  view: { myRole: ProjectRole | null; access: 'member' | 'admin' },
+): Project {
   return {
     id: p.id,
     slug: p.slug,
@@ -18,7 +36,8 @@ export function toProject(p: ProjectRow, myRole: ProjectRole): Project {
     primaryLanguage: p.primaryLanguage,
     framework: p.framework,
     archived: !!p.archivedAt,
-    myRole,
+    myRole: view.myRole,
+    access: view.access,
     createdAt: p.createdAt.toISOString(),
     updatedAt: p.updatedAt.toISOString(),
   };
