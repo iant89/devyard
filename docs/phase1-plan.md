@@ -395,6 +395,16 @@ Notes (Tech Lead rulings on PR #4):
 
 `Project = {id, slug, name, description, ownerId, projectType, primaryLanguage|null, framework|null, archived, myRole, createdAt, updatedAt}`.
 
+Implementation notes (B4):
+
+- **Access:** every `:id` route goes through `requireProjectRole()`. Non-members, unknown ids and soft-deleted projects all return the same `404 NOT_FOUND`. A visible project with too low a role returns `403`. Admins (`projects.manage_all`) act as `owner`, and `projects.read_all` gives at least `viewer`.
+- **Viewer cap on write:** when a member is added or changed, a global Viewer (no admin or developer role) is stored as `viewer` whatever role was requested. The response shows the stored role, and the audit entry records `requestedRole` and `capped: true`. Global Viewers also can't receive ownership through a transfer (400). The cap still applies on read.
+- **Maintainers:** only the owner can add, promote, demote or remove maintainers. Maintainers manage `developer` and `viewer` members. Anyone can leave (`DELETE /:id/members/<self>`) except the owner, whose role changes only through `/transfer`.
+- **Slugs:** derived from `name` when omitted (`my-app`, then `my-app-2` and so on). An explicit slug that clashes returns 409. Slugs stay reserved after a soft delete.
+- **Templates:** only `empty` is accepted in Phase 1. Other `ProjectTemplate` values return `400` until Phases 2–4 implement them.
+- **List:** `scope=all` means every project the caller can see (all of them for `read_all`/`manage_all`). `mine` is projects the caller owns, and `shared` is projects they are a member of but don't own. Archived projects are hidden unless `archived=true`, which lists only archived ones. The sort allow-list is `name`, `slug`, `createdAt`, `updatedAt` (default `-updatedAt`). `q` matches name, slug and description, with LIKE wildcards escaped.
+- **Audit actions:** `project.create`, `project.update`, `project.archive`, `project.unarchive`, `project.delete`, `project.member_add`, `project.member_update`, `project.member_remove`, `project.member_leave`, `project.transfer` (§21.2 "project sharing").
+
 Health: `GET /api/v1/health` → `{status:'ok', version, db:'ok'|'error'}`. Already implemented.
 
 ---
