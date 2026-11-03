@@ -32,7 +32,7 @@
 6. **B7 Packaging** (DevOps, from `docs/phase1-plan.md` §7): production build, static serving, systemd unit, Caddy over HTTPS on a fresh host.
 7. **Close Phase 1**, then plan Phase 2 (Tech Lead writes `docs/phase2-plan.md`).
 
-## 4. Phases (SPEC.md §24)
+## 4. Phases (docs/SPEC.md §24)
 
 | #   | Phase                       | Deliverable                                 | Status                                       |
 | --- | --------------------------- | ------------------------------------------- | -------------------------------------------- |
@@ -59,7 +59,7 @@
 
 ## 6. Team and process
 
-**Roster:** Ian (owner, approves all gates) · Project Manager (orchestrates, talks to Ian) · Tech Lead (plans, code review) · Repository Maintainer (integration, merges) · Back-End Developer · Front-End Developer · UX/UI Designer and Graphics Designer (mockups, brand) · QA Engineer (to be added for Phase 1 QA) · DevOps (B7). Roles are defined in `PM-CHARTER.md`.
+**Roster:** Ian (owner, approves all gates) · Project Manager (orchestrates, talks to Ian) · Tech Lead (plans, code review) · Repository Maintainer (integration, merges) · Back-End Developer · Front-End Developer · UX/UI Designer and Graphics Designer (mockups, brand) · QA Engineer (to be added for Phase 1 QA) · DevOps (B7). Roles are defined in `docs/PM-CHARTER.md`.
 
 **Rules:**
 
@@ -78,12 +78,16 @@
 
 ## 8. Key paths
 
-| Path                                                                              | What                                                                                                |
-| --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `docs/phase1-plan.md`                                                             | Phase 1 technical plan: schema, API contracts, batches B1–B7, risks                                 |
-| `docs/CONTRIBUTING.md`                                                            | Branching and PR conventions                                                                        |
-| `apps/backend/`                                                                   | Fastify + Drizzle + SQLite API (`/api/v1`), with `modules/auth`, `users`, `permissions`, `projects` |
-| `apps/frontend/`                                                                  | Vite + React + ENTERPRISE-UI app                                                                    |
-| `packages/contracts/`                                                             | Shared zod API contracts                                                                            |
-| `vendor/`                                                                         | Pinned ENTERPRISE-UI tarball                                                                        |
-| `SPEC.md`, `PM-CHARTER.md`, `design/` (brand, `DY-D1-layout-spec.md`, `mockups/`) | PM workspace (`/workspace/devyard/` on the box), not in the repo                                    |
+| Path                          | What                                                                                                |
+| ----------------------------- | --------------------------------------------------------------------------------------------------- |
+| `docs/phase1-plan.md`         | Phase 1 technical plan: schema, API contracts, batches B1–B7, risks                                 |
+| `docs/CONTRIBUTING.md`        | Branching and PR conventions                                                                        |
+| `apps/backend/`               | Fastify + Drizzle + SQLite API (`/api/v1`), with `modules/auth`, `users`, `permissions`, `projects` |
+| `apps/frontend/`              | Vite + React + ENTERPRISE-UI app                                                                    |
+| `packages/contracts/`         | Shared zod API contracts                                                                            |
+| `vendor/`                     | Pinned ENTERPRISE-UI tarball                                                                        |
+| `docs/SPEC.md`                | Product spec (phases in §24)                                                                        |
+| `docs/PM-CHARTER.md`          | Team roles, process, merge policy                                                                   |
+| `design/brand/`               | Final logo E3 assets (`options/` holds the alternatives)                                            |
+| `design/mockups/`             | Approved Phase 1 mockups, README, `src/`                                                            |
+| `design/DY-D1-layout-spec.md` | Layout spec                                                                                         |
