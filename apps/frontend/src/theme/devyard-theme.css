@@ -1,0 +1,106 @@
+/*
+ * Devyard theme layer — the ONLY place Devyard look & feel lives (DY-D1 §0.3, gap G1).
+ * Sits on top of ENTERPRISE-UI's `dark` theme and overrides `--eui-*` tokens only.
+ * Graphite surfaces come from `dark` unchanged; the accent becomes muted amber (G1 #d9a441).
+ * Info stays blue so "info" never reads as "action". Status colours are unchanged.
+ * Do not add component selectors here; if a token can't express it, raise a framework request.
+ */
+[data-eui-theme='dark'] {
+  --eui-color-primary: #d9a441;
+  --eui-color-primary-hover: #e6b75c;
+  --eui-color-primary-active: #c18e2f;
+  --eui-color-on-primary: #1a1408;
+  --eui-color-primary-subtle: #3a2f18;
+  --eui-color-primary-subtle-hover: #45381d;
+  --eui-color-selected-text: #eaecee;
+  --eui-color-link: #e0b062;
+  --eui-color-link-hover: #ecc584;
+  --eui-color-surface-selected: #2e2a20;
+  --eui-color-surface-selected-hover: #383226;
+  --eui-color-focus: #e6b75c;
+}
+
+html,
+body {
+  margin: 0;
+}
+
+/*
+ * App-owned layout classes (dy-*) for compositions ENTERPRISE-UI has no pattern for
+ * (DY-D1 gap G2: no AuthLayout). Token values only; never target ENTERPRISE-UI internals.
+ */
+.dy-auth {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--eui-space-6) var(--eui-space-4);
+  background-color: var(--eui-color-background);
+  background-image:
+    linear-gradient(to right, rgb(44 52 61 / 0.3) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(44 52 61 / 0.3) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+.dy-auth__card {
+  padding: var(--eui-space-4);
+}
+.dy-crumbs {
+  min-height: 44px;
+  padding: var(--eui-space-1) var(--eui-space-6);
+  border-bottom: var(--eui-border-width) solid var(--eui-color-border-subtle);
+}
+.dy-auth__column {
+  width: min(400px, 100%);
+}
+.dy-auth__brand {
+  text-align: center;
+}
+.dy-auth__footer {
+  display: flex;
+  justify-content: space-between;
+  padding-inline: var(--eui-space-1);
+}
+.dy-brand-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--eui-space-2);
+}
+.dy-nav-footer {
+  list-style: none;
+  padding: var(--eui-space-1) var(--eui-space-4);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--eui-space-2);
+}
+.dy-drawer-context {
+  padding: 0 var(--eui-space-4) var(--eui-space-2);
+}
+.dy-header-context {
+  width: 180px;
+}
+.dy-header-search {
+  width: min(420px, 100%);
+}
+.dy-skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--eui-space-4);
+}
+.dy-skeleton-grid > .dy-span-2 {
+  grid-column: span 2;
+}
+@media (max-width: 1023px) {
+  .dy-skeleton-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 599px) {
+  .dy-skeleton-grid {
+    gap: var(--eui-space-3);
+  }
+}
+@media (max-width: 599px) {
+  .dy-crumbs {
+    padding-inline: var(--eui-space-4);
+  }
+}
