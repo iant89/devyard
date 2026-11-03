@@ -4,6 +4,7 @@ import {
   LoginRequest,
   PasswordResetConfirmRequest,
   type AuthState,
+  type PublicUser,
 } from '@devyard/contracts';
 import { and, eq, gt, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
@@ -40,8 +41,12 @@ const meta = (req: FastifyRequest) => ({
 export const authRoutes: FastifyPluginAsync = async (app) => {
   // Computed once at startup: equalises timing for unknown, disabled and locked accounts (plan §5.7).
   const dummyHash = await hashPassword('devyard-dummy-password');
-  const authState = (user: UserRow, session: SessionRow): AuthState => ({
-    user: toPublicUser(app.db, user),
+  const authState = (
+    user: UserRow,
+    session: SessionRow,
+    publicUser: PublicUser = toPublicUser(app.db, user),
+  ): AuthState => ({
+    user: publicUser,
     session: toSessionInfo(session, session.id),
     csrfToken: csrfTokenFor(session),
   });
@@ -172,8 +177,9 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get('/me', { config: { auth: true } }, async (req) => {
-    const { user, session } = req.auth!;
-    return { data: authState(user, session) };
+    // Reuse the PublicUser the session preHandler already built for this request (no extra queries).
+    const { user, session, publicUser } = req.auth!;
+    return { data: authState(user, session, publicUser) };
   });
 
   app.post(

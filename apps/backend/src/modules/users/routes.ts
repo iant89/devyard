@@ -134,7 +134,8 @@ export const usersRoutes: FastifyPluginAsync = async (app) => {
       const { id } = IdParams.parse(req.params);
       const u = requireLiveUser(db, id);
       const me = req.auth!.publicUser;
-      return { data: me.id === id || can(me, 'users.manage') ? toPublicUser(db, u) : toSummary(u) };
+      if (me.id === id) return { data: me }; // already built by the session preHandler
+      return { data: can(me, 'users.manage') ? toPublicUser(db, u) : toSummary(u) };
     },
   );
 

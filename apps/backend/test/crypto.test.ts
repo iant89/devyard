@@ -40,3 +40,26 @@ describe('scrypt cost', () => {
     configureScrypt();
   });
 });
+
+describe('scrypt concurrency', () => {
+  it('never runs more than 4 hashes at once and drains cleanly', async () => {
+    const { configureScrypt, hashPassword, resetScryptPeak, scryptStats } =
+      await import('../src/lib/crypto.js');
+    configureScrypt({ N: 2 ** 14 });
+    resetScryptPeak();
+    const seen: number[] = [];
+    const timer = setInterval(() => seen.push(scryptStats().active), 1);
+    try {
+      await Promise.all(Array.from({ length: 16 }, (_, i) => hashPassword(`password number ${i}`)));
+    } finally {
+      clearInterval(timer);
+      configureScrypt();
+    }
+    const stats = scryptStats();
+    expect(stats.max).toBe(4);
+    expect(stats.peak).toBe(4);
+    expect(Math.max(...seen, 0)).toBeLessThanOrEqual(4);
+    expect(stats.active).toBe(0);
+    expect(stats.queued).toBe(0);
+  });
+});

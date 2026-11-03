@@ -86,6 +86,8 @@ export const authPlugin = fp(async (app: FastifyInstance) => {
     const token = req.cookies[sessionCookieName(app.config.cookieSecure)];
     if (token) {
       const resolved = resolveSession(app.db, app.config, token);
+      // Built once per request (roles + permissions = 2 queries) and reused by handlers via
+      // req.auth.publicUser, e.g. GET /auth/me and GET /users/:id on yourself.
       if (resolved) req.auth = { ...resolved, publicUser: toPublicUser(app.db, resolved.user) };
     }
 
