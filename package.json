@@ -1,0 +1,39 @@
+{
+  "name": "devyard",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Devyard — self-hosted development, build and deployment platform. Build. Test. Deploy.",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "build:contracts": "npm run build -w @devyard/contracts",
+    "pretypecheck": "npm run build:contracts",
+    "pretest": "npm run build:contracts",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "test": "npm run test --workspaces --if-present",
+    "check": "npm run typecheck && npm run lint && npm run test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "dev:backend": "npm run dev -w @devyard/backend",
+    "db:generate": "npm run db:generate -w @devyard/backend",
+    "db:migrate": "npm run db:migrate -w @devyard/backend"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.10.0",
+    "eslint": "^10.14.0",
+    "globals": "^17.0.0",
+    "prettier": "^3.6.0",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^5.1.0"
+  }
+}
