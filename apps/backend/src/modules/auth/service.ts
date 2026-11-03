@@ -10,8 +10,9 @@ import {
   userRoles,
   users,
 } from '../../db/schema.js';
-import { newToken, sha256 } from '../../lib/crypto.js';
+import { hashPassword, newToken, sha256 } from '../../lib/crypto.js';
 import { newId } from '../../lib/ids.js';
+import { writeAudit } from '../audit/service.js';
 
 export type UserRow = typeof users.$inferSelect;
 export type SessionRow = typeof sessions.$inferSelect;
@@ -263,6 +264,31 @@ export function recordFailedPassword(db: Db, userId: string, now = Date.now()): 
     .returning({ id: users.id })
     .get();
   return !!locked;
+}
+
+/** Records a failed password check and writes the auth.lockout audit if this call locked the account. */
+export function lockoutOnFailure(
+  db: Db,
+  userId: string,
+  ip: string,
+  via: 'login' | 'password_change' | 'email_change',
+): void {
+  if (recordFailedPassword(db, userId))
+    writeAudit(db, {
+      actorId: null,
+      action: 'auth.lockout',
+      outcome: 'success',
+      targetType: 'user',
+      targetId: userId,
+      ip,
+      metadata: { via },
+    });
+}
+
+let dummyHashPromise: Promise<string> | undefined;
+/** Shared dummy hash (computed once) to equalise timing on locked/unknown accounts (plan §5.7). */
+export function getDummyHash(): Promise<string> {
+  return (dummyHashPromise ??= hashPassword('devyard-dummy-password'));
 }
 
 export function isLocked(u: Pick<UserRow, 'lockedUntil'>, now = Date.now()): boolean {

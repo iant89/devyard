@@ -66,9 +66,9 @@ export type AuditEntry = z.infer<typeof AuditEntry>;
 export const UserActivityEntry = AuditEntry.extend({ relation: z.enum(['actor', 'target']) });
 export type UserActivityEntry = z.infer<typeof UserActivityEntry>;
 
-/** Sortable fields for GET /users (`field` or `-field`). */
 /** Sort fields available to callers without `users.manage` (no email or login metadata). */
 export const USER_SORT_FIELDS_PUBLIC = ['username', 'displayName', 'createdAt'] as const;
+/** Sortable fields for GET /users (`field` or `-field`). */
 export const USER_SORT_FIELDS = [
   'username',
   'displayName',

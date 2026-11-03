@@ -8,7 +8,7 @@ import {
   type RoleName,
 } from '@devyard/contracts';
 import { and, asc, desc, eq, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { auditLogs, users } from '../../db/schema.js';
 import { hashPassword, verifyPassword } from '../../lib/crypto.js';
@@ -16,8 +16,10 @@ import { ApiError } from '../../lib/errors.js';
 import { newId } from '../../lib/ids.js';
 import { writeAudit } from '../audit/service.js';
 import {
+  getDummyHash,
+  isLocked,
   issuePasswordResetToken,
-  recordFailedPassword,
+  lockoutOnFailure,
   revokeUserSessions,
   toPublicUser,
 } from '../auth/service.js';
@@ -154,65 +156,104 @@ export const usersRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  app.patch('/:id', { config: { auth: true } }, async (req) => {
-    const { id } = IdParams.parse(req.params);
-    const body = UpdateUserRequest.parse(req.body);
-    const me = req.auth!.publicUser;
-    const manager = can(me, 'users.manage');
-    if (!manager) {
-      const selfFieldsOnly = Object.keys(body).every(
-        (k) => k === 'displayName' || k === 'email' || k === 'currentPassword',
-      );
-      if (me.id !== id || !selfFieldsOnly)
-        throw new ApiError('FORBIDDEN', 'Insufficient permissions');
-    }
-    const target = requireLiveUser(db, id);
-    const email = body.email?.toLowerCase();
-    // Re-authenticate before changing your own email (it's a login identifier; PR #4 review).
-    if (me.id === id && email !== undefined && email !== target.email) {
-      const ok =
-        !!body.currentPassword && (await verifyPassword(body.currentPassword, target.passwordHash));
-      if (!ok) {
-        if (body.currentPassword) recordFailedPassword(db, id);
-        throw new ApiError(
-          'VALIDATION_FAILED',
-          'Current password is required to change your email',
-          [{ path: 'currentPassword', message: 'Current password is incorrect or missing' }],
-        );
-      }
-    }
+  // Self email change re-authenticates, so it gets /auth/password's protections (PR #4 review).
+  const isSelfEmailChange = (req: FastifyRequest): boolean => {
+    const b = req.body as { email?: unknown } | undefined;
+    const { id } = req.params as { id?: string };
+    return !!req.auth && req.auth.user.id === id && typeof b?.email === 'string';
+  };
 
-    db.transaction((tx) => {
-      if (email && email !== target.email) assertUnique(tx, { email }, id);
-      const currentRoles = userRoleIds(tx, id);
-      const nextRoles: RoleName[] = body.roles ?? currentRoles;
-      const nextActive = (body.status ?? target.status) === 'active';
-      assertNotLastAdmin(tx, target, { roles: nextRoles, active: nextActive });
-
-      const patch: Partial<typeof users.$inferInsert> = { updatedAt: new Date() };
-      if (body.displayName !== undefined) patch.displayName = body.displayName;
-      if (email !== undefined) patch.email = email;
-      if (body.status !== undefined) patch.status = body.status;
-      tx.update(users).set(patch).where(eq(users.id, id)).run();
-      if (body.roles) setRoles(tx, id, body.roles, me.id);
-
-      const disabling = body.status === 'disabled' && target.status !== 'disabled';
-      if (disabling) revokeUserSessions(tx, id, 'user_disabled');
-      writeAudit(tx, {
-        actorId: me.id,
-        action: disabling ? 'user.disable' : 'user.update',
-        outcome: 'success',
-        targetType: 'user',
-        targetId: id,
-        ip: req.ip,
-        metadata: {
-          fields: Object.keys(body).filter((k) => k !== 'currentPassword'),
-          ...(body.roles ? { rolesBefore: currentRoles, rolesAfter: body.roles } : {}),
+  app.patch(
+    '/:id',
+    {
+      config: {
+        auth: true,
+        // 5/min per user for self email changes (keyed after the session preHandler).
+        rateLimit: {
+          max: 5,
+          timeWindow: '1 minute',
+          hook: 'preHandler',
+          keyGenerator: (req) => `emailchange:${req.auth?.user.id ?? req.ip}`,
+          allowList: (req) => !isSelfEmailChange(req),
         },
+      },
+    },
+    async (req) => {
+      const { id } = IdParams.parse(req.params);
+      const body = UpdateUserRequest.parse(req.body);
+      const me = req.auth!.publicUser;
+      const manager = can(me, 'users.manage');
+      if (!manager) {
+        const selfFieldsOnly = Object.keys(body).every(
+          (k) => k === 'displayName' || k === 'email' || k === 'currentPassword',
+        );
+        if (me.id !== id || !selfFieldsOnly)
+          throw new ApiError('FORBIDDEN', 'Insufficient permissions');
+      }
+      const target = requireLiveUser(db, id);
+      const email = body.email?.toLowerCase();
+      // Re-authenticate before changing your own email (it's a login identifier; PR #4 review).
+      if (me.id === id && email !== undefined && email !== target.email) {
+        const locked = isLocked(target);
+        let ok = false;
+        if (body.currentPassword)
+          ok = locked
+            ? (await verifyPassword(body.currentPassword, await getDummyHash()), false)
+            : await verifyPassword(body.currentPassword, target.passwordHash);
+        if (!ok) {
+          if (body.currentPassword) {
+            // Failures count toward the same lockout as login (plan §5.7).
+            if (!locked) lockoutOnFailure(db, id, req.ip, 'email_change');
+            writeAudit(db, {
+              actorId: me.id,
+              action: 'user.update',
+              outcome: 'failure',
+              targetType: 'user',
+              targetId: id,
+              ip: req.ip,
+              metadata: { reason: locked ? 'locked' : 'bad_password' },
+            });
+          }
+          throw new ApiError(
+            'VALIDATION_FAILED',
+            'Current password is required to change your email',
+            [{ path: 'currentPassword', message: 'Current password is incorrect or missing' }],
+          );
+        }
+      }
+
+      db.transaction((tx) => {
+        if (email && email !== target.email) assertUnique(tx, { email }, id);
+        const currentRoles = userRoleIds(tx, id);
+        const nextRoles: RoleName[] = body.roles ?? currentRoles;
+        const nextActive = (body.status ?? target.status) === 'active';
+        assertNotLastAdmin(tx, target, { roles: nextRoles, active: nextActive });
+
+        const patch: Partial<typeof users.$inferInsert> = { updatedAt: new Date() };
+        if (body.displayName !== undefined) patch.displayName = body.displayName;
+        if (email !== undefined) patch.email = email;
+        if (body.status !== undefined) patch.status = body.status;
+        tx.update(users).set(patch).where(eq(users.id, id)).run();
+        if (body.roles) setRoles(tx, id, body.roles, me.id);
+
+        const disabling = body.status === 'disabled' && target.status !== 'disabled';
+        if (disabling) revokeUserSessions(tx, id, 'user_disabled');
+        writeAudit(tx, {
+          actorId: me.id,
+          action: disabling ? 'user.disable' : 'user.update',
+          outcome: 'success',
+          targetType: 'user',
+          targetId: id,
+          ip: req.ip,
+          metadata: {
+            fields: Object.keys(body).filter((k) => k !== 'currentPassword'),
+            ...(body.roles ? { rolesBefore: currentRoles, rolesAfter: body.roles } : {}),
+          },
+        });
       });
-    });
-    return { data: toPublicUser(db, requireLiveUser(db, id)) };
-  });
+      return { data: toPublicUser(db, requireLiveUser(db, id)) };
+    },
+  );
 
   app.delete('/:id', { config: { permission: 'users.manage' } }, async (req, reply) => {
     const { id } = IdParams.parse(req.params);

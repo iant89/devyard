@@ -344,6 +344,36 @@ describe('users: behaviour', () => {
     ).toBe(1);
   });
 
+  it('a locked account cannot change its email even with the correct password', async () => {
+    app.db
+      .update(users)
+      .set({ lockedUntil: new Date(Date.now() + 60_000) })
+      .where(eq(users.id, a.ids.viewer))
+      .run();
+    const res = await call(app, a.viewer, 'PATCH', `/api/v1/users/${a.ids.viewer}`, {
+      email: 'locked-v@example.com',
+      currentPassword: PW,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(app.db.select().from(users).where(eq(users.id, a.ids.viewer)).get()!.email).not.toBe(
+      'locked-v@example.com',
+    );
+  });
+
+  it('self email change is rate limited at 5/min per user (6th gets 429)', async () => {
+    const codes: number[] = [];
+    for (let i = 0; i < 6; i++)
+      codes.push(
+        (
+          await call(app, a.viewer, 'PATCH', `/api/v1/users/${a.ids.viewer}`, {
+            email: 'rl-v@example.com',
+            currentPassword: 'wrong pw!!',
+          })
+        ).statusCode,
+      );
+    expect(codes).toEqual([400, 400, 400, 400, 400, 429]);
+  });
+
   it('changing your own email requires currentPassword (and counts failures)', async () => {
     const url = `/api/v1/users/${a.ids.viewer}`;
     let res = await call(app, a.viewer, 'PATCH', url, { email: 'new-v@example.com' });
