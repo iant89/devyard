@@ -21,8 +21,9 @@ import {
   csrfTokenFor,
   findUserByLogin,
   listLiveSessions,
+  getDummyHash,
   isLocked,
-  recordFailedPassword,
+  lockoutOnFailure as sharedLockoutOnFailure,
   revokeSession,
   revokeUserSessions,
   toPublicUser,
@@ -40,7 +41,7 @@ const meta = (req: FastifyRequest) => ({
 
 export const authRoutes: FastifyPluginAsync = async (app) => {
   // Computed once at startup: equalises timing for unknown, disabled and locked accounts (plan §5.7).
-  const dummyHash = await hashPassword('devyard-dummy-password');
+  const dummyHash = await getDummyHash();
   const authState = (
     user: UserRow,
     session: SessionRow,
@@ -95,18 +96,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  const lockoutOnFailure = (userId: string, ip: string, via: 'login' | 'password_change') => {
-    if (recordFailedPassword(app.db, userId))
-      writeAudit(app.db, {
-        actorId: null,
-        action: 'auth.lockout',
-        outcome: 'success',
-        targetType: 'user',
-        targetId: userId,
-        ip,
-        metadata: { via },
-      });
-  };
+  const lockoutOnFailure = (userId: string, ip: string, via: 'login' | 'password_change') =>
+    sharedLockoutOnFailure(app.db, userId, ip, via);
 
   app.post(
     '/login',
