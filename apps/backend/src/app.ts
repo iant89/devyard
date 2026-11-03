@@ -8,7 +8,17 @@ import { openDatabase, runMigrations, type Db } from './db/client.js';
 import { seedRbac } from './db/seed.js';
 import { registerErrorHandling } from './lib/errors.js';
 import { newId } from './lib/ids.js';
+import { authPlugin } from './modules/auth/plugin.js';
+import { authRoutes } from './modules/auth/routes.js';
+import { purgeExpired } from './modules/auth/service.js';
 import { healthRoutes } from './modules/health/routes.js';
+
+export interface BuildOptions {
+  /** Destination for log lines (tests capture logs with this). Defaults to stdout. */
+  logStream?: NodeJS.WritableStream;
+}
+
+const PURGE_INTERVAL_MS = 60 * 60_000;
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -21,9 +31,21 @@ declare module 'fastify' {
  * Builds the control-plane API (spec §4.1 modular monolith, §4.2 control plane only:
  * this process never executes project code).
  */
-export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
+export async function buildApp(
+  config: AppConfig,
+  opts: BuildOptions = {},
+): Promise<FastifyInstance> {
   const app = Fastify({
-    logger: { level: config.logLevel, redact: ['req.headers.cookie', 'req.headers.authorization'] },
+    logger: {
+      level: config.logLevel,
+      redact: [
+        'req.headers.cookie',
+        'req.headers.authorization',
+        'req.headers["x-csrf-token"]',
+        'res.headers["set-cookie"]',
+      ],
+      ...(opts.logStream ? { stream: opts.logStream } : {}),
+    },
     genReqId: () => newId(),
     trustProxy: true, // behind Caddy (spec §13)
   });
@@ -33,7 +55,20 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   seedRbac(db);
   app.decorate('db', db);
   app.decorate('config', config);
-  app.addHook('onClose', async () => sqlite.close());
+  // Hourly purge of expired/revoked sessions and used reset tokens (plan §5.3).
+  const purgeTimer = setInterval(() => {
+    try {
+      const n = purgeExpired(db, config);
+      app.log.info(n, 'purged expired auth rows');
+    } catch (err) {
+      app.log.error({ err }, 'auth purge failed');
+    }
+  }, PURGE_INTERVAL_MS);
+  purgeTimer.unref();
+  app.addHook('onClose', async () => {
+    clearInterval(purgeTimer);
+    sqlite.close();
+  });
 
   registerErrorHandling(app);
   await app.register(helmet);
@@ -42,8 +77,10 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
 
   await app.register(
     async (v1) => {
+      await v1.register(authPlugin);
       await v1.register(healthRoutes);
-      // Batch B2+: auth, users, projects modules register here.
+      await v1.register(authRoutes, { prefix: '/auth' });
+      // Batch B3+: users, projects modules register here.
     },
     { prefix: API_PREFIX },
   );

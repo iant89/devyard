@@ -24,7 +24,8 @@
     "format:check": "prettier --check .",
     "dev:backend": "npm run dev -w @devyard/backend",
     "db:generate": "npm run db:generate -w @devyard/backend",
-    "db:migrate": "npm run db:migrate -w @devyard/backend"
+    "db:migrate": "npm run db:migrate -w @devyard/backend",
+    "user:create-admin": "npm run user:create-admin -w @devyard/backend --"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
