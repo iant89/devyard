@@ -5,7 +5,7 @@ import {
   timingSafeEqual,
   type ScryptOptions,
 } from 'node:crypto';
-import { ApiError } from './errors.js';
+import { BusyError } from './errors.js';
 
 let active = 0;
 let peak = 0;
@@ -19,8 +19,7 @@ export const MAX_QUEUED = 256;
  */
 async function withSlot<T>(fn: () => Promise<T>): Promise<T> {
   if (active >= MAX_CONCURRENT) {
-    if (waiters.length >= MAX_QUEUED)
-      throw new ApiError('RATE_LIMITED', 'Server busy, retry shortly');
+    if (waiters.length >= MAX_QUEUED) throw new BusyError();
     await new Promise<void>((r) => waiters.push(r)); // woken holding a transferred slot
   } else {
     active++;

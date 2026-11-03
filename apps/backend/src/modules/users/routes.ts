@@ -3,6 +3,7 @@ import {
   PageQuery,
   UpdateUserRequest,
   USER_SORT_FIELDS,
+  USER_SORT_FIELDS_PUBLIC,
   UserListQuery,
   type RoleName,
 } from '@devyard/contracts';
@@ -10,15 +11,21 @@ import { and, asc, desc, eq, inArray, isNull, or, sql, type SQL } from 'drizzle-
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { auditLogs, users } from '../../db/schema.js';
-import { hashPassword } from '../../lib/crypto.js';
+import { hashPassword, verifyPassword } from '../../lib/crypto.js';
 import { ApiError } from '../../lib/errors.js';
 import { newId } from '../../lib/ids.js';
 import { writeAudit } from '../audit/service.js';
-import { issuePasswordResetToken, revokeUserSessions, toPublicUser } from '../auth/service.js';
+import {
+  issuePasswordResetToken,
+  recordFailedPassword,
+  revokeUserSessions,
+  toPublicUser,
+} from '../auth/service.js';
 import { can, requirePermission } from '../permissions/service.js';
 import {
   assertNotLastAdmin,
   assertUnique,
+  findAnyUser,
   ownsLiveProjects,
   requireLiveUser,
   setRoles,
@@ -37,13 +44,13 @@ const SORT_COLUMNS = {
   lastLoginAt: users.lastLoginAt,
 } satisfies Record<(typeof USER_SORT_FIELDS)[number], unknown>;
 
-function parseSort(sort: string | undefined): SQL {
+function parseSort(sort: string | undefined, allowed: readonly string[]): SQL {
   if (!sort) return asc(users.createdAt);
   const descending = sort.startsWith('-');
   const field = descending ? sort.slice(1) : sort;
-  if (!(field in SORT_COLUMNS))
+  if (!allowed.includes(field) || !(field in SORT_COLUMNS))
     throw new ApiError('VALIDATION_FAILED', 'Request validation failed', [
-      { path: 'sort', message: `sort must be one of ${USER_SORT_FIELDS.join(', ')}` },
+      { path: 'sort', message: `sort must be one of ${allowed.join(', ')}` },
     ]);
   const col = SORT_COLUMNS[field as keyof typeof SORT_COLUMNS];
   return descending ? desc(col) : asc(col);
@@ -57,21 +64,29 @@ export const usersRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/', { config: { permission: 'users.read' } }, async (req) => {
     const q = UserListQuery.parse(req.query);
+    // Callers without users.manage must not be able to probe emails, statuses or roles (PR #4 review):
+    // q matches only username/displayName, sort is limited, only active users are listed, and the
+    // role filter is rejected.
+    const manager = can(req.auth!.publicUser, 'users.manage');
+    if (!manager && q.role)
+      throw new ApiError('VALIDATION_FAILED', 'Request validation failed', [
+        { path: 'role', message: 'role filter requires users.manage' },
+      ]);
     const conds: SQL[] = [isNull(users.deletedAt)];
-    if (q.status) conds.push(eq(users.status, q.status));
+    if (!manager) conds.push(eq(users.status, 'active'));
+    else if (q.status) conds.push(eq(users.status, q.status));
     if (q.role) conds.push(inArray(users.id, userIdsWithRole(db, q.role)));
     if (q.q) {
       const pat = `%${escapeLike(q.q.toLowerCase())}%`;
-      conds.push(
-        or(
-          sql`${users.username} like ${pat} escape '\\'`,
-          sql`${users.email} like ${pat} escape '\\'`,
-          sql`lower(${users.displayName}) like ${pat} escape '\\'`,
-        )!,
-      );
+      const fields = [
+        sql`${users.username} like ${pat} escape '\\'`,
+        sql`lower(${users.displayName}) like ${pat} escape '\\'`,
+      ];
+      if (manager) fields.push(sql`${users.email} like ${pat} escape '\\'`);
+      conds.push(or(...fields)!);
     }
     const where = and(...conds);
-    const order = parseSort(q.sort);
+    const order = parseSort(q.sort, manager ? USER_SORT_FIELDS : USER_SORT_FIELDS_PUBLIC);
     const total =
       db
         .select({ n: sql<number>`count(*)` })
@@ -86,7 +101,7 @@ export const usersRoutes: FastifyPluginAsync = async (app) => {
       .limit(q.pageSize)
       .offset((q.page - 1) * q.pageSize)
       .all();
-    const full = can(req.auth!.publicUser, 'users.manage');
+    const full = manager;
     return {
       data: rows.map((u) => (full ? toPublicUser(db, u) : toSummary(u))),
       meta: { page: q.page, pageSize: q.pageSize, total },
@@ -145,12 +160,27 @@ export const usersRoutes: FastifyPluginAsync = async (app) => {
     const me = req.auth!.publicUser;
     const manager = can(me, 'users.manage');
     if (!manager) {
-      const selfFieldsOnly = Object.keys(body).every((k) => k === 'displayName' || k === 'email');
+      const selfFieldsOnly = Object.keys(body).every(
+        (k) => k === 'displayName' || k === 'email' || k === 'currentPassword',
+      );
       if (me.id !== id || !selfFieldsOnly)
         throw new ApiError('FORBIDDEN', 'Insufficient permissions');
     }
     const target = requireLiveUser(db, id);
     const email = body.email?.toLowerCase();
+    // Re-authenticate before changing your own email (it's a login identifier; PR #4 review).
+    if (me.id === id && email !== undefined && email !== target.email) {
+      const ok =
+        !!body.currentPassword && (await verifyPassword(body.currentPassword, target.passwordHash));
+      if (!ok) {
+        if (body.currentPassword) recordFailedPassword(db, id);
+        throw new ApiError(
+          'VALIDATION_FAILED',
+          'Current password is required to change your email',
+          [{ path: 'currentPassword', message: 'Current password is incorrect or missing' }],
+        );
+      }
+    }
 
     db.transaction((tx) => {
       if (email && email !== target.email) assertUnique(tx, { email }, id);
@@ -176,7 +206,7 @@ export const usersRoutes: FastifyPluginAsync = async (app) => {
         targetId: id,
         ip: req.ip,
         metadata: {
-          fields: Object.keys(body),
+          fields: Object.keys(body).filter((k) => k !== 'currentPassword'),
           ...(body.roles ? { rolesBefore: currentRoles, rolesAfter: body.roles } : {}),
         },
       });
@@ -187,6 +217,7 @@ export const usersRoutes: FastifyPluginAsync = async (app) => {
   app.delete('/:id', { config: { permission: 'users.manage' } }, async (req, reply) => {
     const { id } = IdParams.parse(req.params);
     const me = req.auth!.user.id;
+    if (id === me) throw new ApiError('CONFLICT', 'You cannot delete your own account');
     db.transaction((tx) => {
       const target = requireLiveUser(tx, id);
       assertNotLastAdmin(tx, target, { roles: [], active: false });
@@ -242,7 +273,8 @@ export const usersRoutes: FastifyPluginAsync = async (app) => {
     async (req) => {
       const { id } = IdParams.parse(req.params);
       const q = PageQuery.pick({ page: true, pageSize: true }).parse(req.query);
-      requireLiveUser(db, id);
+      // Deleted users' activity stays readable (users.manage / audit.read).
+      if (!findAnyUser(db, id)) throw new ApiError('NOT_FOUND', 'User not found');
       // Actor side and target side (spec §5.2 "view user activity"; Tech Lead ruling on PR #4).
       const where = or(
         eq(auditLogs.actorId, id),

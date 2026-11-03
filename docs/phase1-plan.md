@@ -375,6 +375,10 @@ Rate limits and CSRF for these routes are covered in §5.5 and §5.7. Every unsa
 Notes (Tech Lead rulings on PR #4):
 
 - **Reduced shape:** callers without `users.manage` get `UserSummary {id, username, displayName}` from both `GET /` and `GET /:id`. The exception is `GET /:id` on their own id, which returns the full `PublicUser`.
+- **No enumeration for non-managers:** without `users.manage`, `GET /` lists only active users, and `q` matches only `username` and `displayName`. `sort` accepts only `username`, `displayName` and `createdAt` (others → 400), and `role` → 400. The `status` parameter is ignored. Managers can also search by email and sort by `email` and `lastLoginAt`.
+- **Self email change:** changing your own email requires `currentPassword`. A wrong password counts toward lockout, and the response is `400` with `details[0].path = currentPassword`.
+- **Delete:** deleting yourself returns `409`. A deleted user's `/:id/activity` stays readable to `users.manage` and `audit.read`, while the other `:id` routes return 404.
+- **Reset tokens:** issuing a new one deletes the user's older unused tokens, so only the newest works.
 - **Deleted users:** soft-deleted users keep their username and email reserved (the unique indexes cover deleted rows) for the MVP. Reusing them needs the later hard-purge admin action (D7).
 - **Activity:** `GET /:id/activity` returns `UserActivityEntry` = `AuditEntry` + `relation: 'actor' | 'target'`. It covers entries the user performed (`actor`, including actions on themselves) and entries performed on them (`targetType='user'`, `targetId=:id`, marked `target`). Newest first, paginated.
 

@@ -63,3 +63,18 @@ describe('scrypt concurrency', () => {
     expect(stats.queued).toBe(0);
   });
 });
+
+describe('BusyError mapping', () => {
+  it('maps BusyError to 429 RATE_LIMITED', async () => {
+    const { BusyError } = await import('../src/lib/errors.js');
+    const { testApp } = await import('./helpers.js');
+    const app = await testApp();
+    app.get('/busy', async () => {
+      throw new BusyError();
+    });
+    const res = await app.inject({ method: 'GET', url: '/busy' });
+    expect(res.statusCode).toBe(429);
+    expect(res.json().error.code).toBe('RATE_LIMITED');
+    await app.close();
+  });
+});
