@@ -1,7 +1,6 @@
 import { Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { buildApp } from '../../src/app.js';
-import { loadConfig } from '../../src/config/index.js';
+import { testApp, TRUST_LOCAL_PROXY } from '../helpers.js';
 import { issuePasswordResetToken } from '../../src/modules/auth/service.js';
 import { ADMIN, freshIp } from './fixtures.js';
 
@@ -14,8 +13,8 @@ describe('auth: no secrets in logs', () => {
         cb();
       },
     });
-    const app = await buildApp(
-      loadConfig({ NODE_ENV: 'test', DEVYARD_DB_PATH: ':memory:', DEVYARD_LOG_LEVEL: 'trace' }),
+    const app = await testApp(
+      { DEVYARD_LOG_LEVEL: 'trace', ...TRUST_LOCAL_PROXY },
       { logStream: stream },
     );
     const secrets: string[] = [ADMIN.password];

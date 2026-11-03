@@ -20,8 +20,8 @@ import {
   csrfTokenFor,
   findUserByLogin,
   listLiveSessions,
-  LOCKOUT_MS,
-  MAX_FAILED_LOGINS,
+  isLocked,
+  recordFailedPassword,
   revokeSession,
   revokeUserSessions,
   toPublicUser,
@@ -31,8 +31,6 @@ import {
 } from './service.js';
 
 const GENERIC_LOGIN_FAILURE = 'Invalid credentials';
-/** Equalises timing for unknown users (no user enumeration, plan §5.7). */
-let dummyHash: Promise<string> | undefined;
 
 const meta = (req: FastifyRequest) => ({
   ip: req.ip,
@@ -40,6 +38,8 @@ const meta = (req: FastifyRequest) => ({
 });
 
 export const authRoutes: FastifyPluginAsync = async (app) => {
+  // Computed once at startup: equalises timing for unknown, disabled and locked accounts (plan §5.7).
+  const dummyHash = await hashPassword('devyard-dummy-password');
   const authState = (user: UserRow, session: SessionRow): AuthState => ({
     user: toPublicUser(app.db, user),
     session: toSessionInfo(session, session.id),
@@ -48,43 +48,60 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/bootstrap', async () => ({ data: { required: countUsers(app.db) === 0 } }));
 
-  app.post('/bootstrap', { config: { csrf: false } }, async (req, reply) => {
-    const body = BootstrapRequest.parse(req.body);
-    if (countUsers(app.db) > 0) throw new ApiError('CONFLICT', 'Bootstrap already completed');
-    const passwordHash = await hashPassword(body.password);
-    const now = Date.now();
-    // Synchronous transaction: the emptiness check and insert are atomic (plan §5.8).
-    const result = app.db.transaction((tx) => {
-      if (countUsers(tx) > 0) return null;
-      const id = newId(now);
-      tx.insert(users)
-        .values({
-          id,
-          username: body.username.toLowerCase(),
-          email: body.email.toLowerCase(),
-          displayName: body.displayName,
-          passwordHash,
-          passwordChangedAt: new Date(now),
-          lastLoginAt: new Date(now),
-        })
-        .run();
-      tx.insert(userRoles).values({ userId: id, roleId: 'admin' }).run();
-      const s = createSession(tx, app.config, id, meta(req), now);
-      writeAudit(tx, {
-        actorId: id,
-        action: 'auth.bootstrap',
+  app.post(
+    '/bootstrap',
+    { config: { csrf: false, rateLimit: { max: 5, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      const body = BootstrapRequest.parse(req.body);
+      if (countUsers(app.db) > 0) throw new ApiError('CONFLICT', 'Bootstrap already completed');
+      const passwordHash = await hashPassword(body.password);
+      const now = Date.now();
+      // Synchronous transaction: the emptiness check and insert are atomic (plan §5.8).
+      const result = app.db.transaction((tx) => {
+        if (countUsers(tx) > 0) return null;
+        const id = newId(now);
+        tx.insert(users)
+          .values({
+            id,
+            username: body.username.toLowerCase(),
+            email: body.email.toLowerCase(),
+            displayName: body.displayName,
+            passwordHash,
+            passwordChangedAt: new Date(now),
+            lastLoginAt: new Date(now),
+          })
+          .run();
+        tx.insert(userRoles).values({ userId: id, roleId: 'admin' }).run();
+        const s = createSession(tx, app.config, id, meta(req), now);
+        writeAudit(tx, {
+          actorId: id,
+          action: 'auth.bootstrap',
+          outcome: 'success',
+          targetType: 'user',
+          targetId: id,
+          ip: req.ip,
+        });
+        return s;
+      });
+      if (!result) throw new ApiError('CONFLICT', 'Bootstrap already completed');
+      const user = app.db.select().from(users).where(eq(users.id, result.session.userId)).get()!;
+      setSessionCookie(app, reply, result.token);
+      return reply.status(201).send({ data: authState(user, result.session) });
+    },
+  );
+
+  const lockoutOnFailure = (userId: string, ip: string, via: 'login' | 'password_change') => {
+    if (recordFailedPassword(app.db, userId))
+      writeAudit(app.db, {
+        actorId: null,
+        action: 'auth.lockout',
         outcome: 'success',
         targetType: 'user',
-        targetId: id,
-        ip: req.ip,
+        targetId: userId,
+        ip,
+        metadata: { via },
       });
-      return s;
-    });
-    if (!result) throw new ApiError('CONFLICT', 'Bootstrap already completed');
-    const user = app.db.select().from(users).where(eq(users.id, result.session.userId)).get()!;
-    setSessionCookie(app, reply, result.token);
-    return reply.status(201).send({ data: authState(user, result.session) });
-  });
+  };
 
   app.post(
     '/login',
@@ -106,37 +123,17 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         return new ApiError('UNAUTHENTICATED', GENERIC_LOGIN_FAILURE);
       };
 
-      if (!user) {
-        dummyHash ??= hashPassword('devyard-dummy-password');
-        await verifyPassword(body.password, await dummyHash);
-        throw fail('unknown_user', null);
+      // Unknown, disabled and locked accounts all pay for one verify so timing doesn't leak state.
+      // Disabled accounts don't accumulate lockout failures (plan §5.7).
+      if (!user || user.status !== 'active' || isLocked(user, now)) {
+        await verifyPassword(body.password, dummyHash);
+        if (!user) throw fail('unknown_user', null);
+        throw fail(user.status !== 'active' ? 'disabled' : 'locked', user.id);
       }
-      if (user.lockedUntil && user.lockedUntil.getTime() > now) throw fail('locked', user.id);
-      const ok = await verifyPassword(body.password, user.passwordHash);
-      if (!ok) {
-        const count = user.failedLoginCount + 1;
-        const lock = count >= MAX_FAILED_LOGINS;
-        app.db
-          .update(users)
-          .set({
-            failedLoginCount: lock ? 0 : count,
-            lockedUntil: lock ? new Date(now + LOCKOUT_MS) : user.lockedUntil,
-          })
-          .where(eq(users.id, user.id))
-          .run();
-        if (lock)
-          writeAudit(app.db, {
-            actorId: null,
-            action: 'auth.lockout',
-            outcome: 'success',
-            targetType: 'user',
-            targetId: user.id,
-            ip: req.ip,
-            metadata: { failures: count },
-          });
+      if (!(await verifyPassword(body.password, user.passwordHash))) {
+        lockoutOnFailure(user.id, req.ip, 'login');
         throw fail('bad_password', user.id);
       }
-      if (user.status !== 'active') throw fail('disabled', user.id);
 
       const s = app.db.transaction((tx) => {
         tx.update(users)
@@ -179,70 +176,120 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     return { data: authState(user, session) };
   });
 
-  app.post('/password', { config: { auth: true } }, async (req, reply) => {
-    const body = ChangePasswordRequest.parse(req.body);
-    const { user, session } = req.auth!;
-    if (!(await verifyPassword(body.currentPassword, user.passwordHash))) {
-      writeAudit(app.db, {
-        actorId: user.id,
-        action: 'auth.password_change',
-        outcome: 'failure',
-        targetType: 'user',
-        targetId: user.id,
-        ip: req.ip,
+  app.post(
+    '/password',
+    {
+      config: {
+        auth: true,
+        // 5/min per user (keyed after the session preHandler has resolved the caller).
+        rateLimit: {
+          max: 5,
+          timeWindow: '1 minute',
+          hook: 'preHandler',
+          keyGenerator: (req) => `pwchange:${req.auth?.user.id ?? req.ip}`,
+        },
+      },
+    },
+    async (req, reply) => {
+      const body = ChangePasswordRequest.parse(req.body);
+      const { user, session } = req.auth!;
+      const locked = isLocked(user);
+      const ok = locked
+        ? (await verifyPassword(body.currentPassword, dummyHash), false)
+        : await verifyPassword(body.currentPassword, user.passwordHash);
+      if (!ok) {
+        // Failures count toward the same lockout as login (plan §5.7).
+        if (!locked) lockoutOnFailure(user.id, req.ip, 'password_change');
+        writeAudit(app.db, {
+          actorId: user.id,
+          action: 'auth.password_change',
+          outcome: 'failure',
+          targetType: 'user',
+          targetId: user.id,
+          ip: req.ip,
+          metadata: { reason: locked ? 'locked' : 'bad_password' },
+        });
+        throw new ApiError('VALIDATION_FAILED', 'Current password is incorrect', [
+          { path: 'currentPassword', message: 'Current password is incorrect' },
+        ]);
+      }
+      const passwordHash = await hashPassword(body.newPassword);
+      const now = Date.now();
+      const s = app.db.transaction((tx) => {
+        tx.update(users)
+          .set({
+            passwordHash,
+            passwordChangedAt: new Date(now),
+            failedLoginCount: 0,
+            updatedAt: new Date(now),
+          })
+          .where(eq(users.id, user.id))
+          .run();
+        // Rotation (plan §5.4): revoke everything including the current session, issue a new one.
+        revokeUserSessions(tx, user.id, 'password_change', undefined, now);
+        writeAudit(tx, {
+          actorId: user.id,
+          action: 'auth.password_change',
+          outcome: 'success',
+          targetType: 'user',
+          targetId: user.id,
+          ip: req.ip,
+          metadata: { previousSession: session.id },
+        });
+        return createSession(tx, app.config, user.id, meta(req), now);
       });
-      throw new ApiError('VALIDATION_FAILED', 'Current password is incorrect', [
-        { path: 'currentPassword', message: 'Current password is incorrect' },
-      ]);
-    }
-    const passwordHash = await hashPassword(body.newPassword);
-    const now = Date.now();
-    const s = app.db.transaction((tx) => {
-      tx.update(users)
-        .set({ passwordHash, passwordChangedAt: new Date(now), updatedAt: new Date(now) })
-        .where(eq(users.id, user.id))
-        .run();
-      // Rotation (plan §5.4): revoke everything including the current session, issue a new one.
-      revokeUserSessions(tx, user.id, 'password_change', undefined, now);
-      writeAudit(tx, {
-        actorId: user.id,
-        action: 'auth.password_change',
-        outcome: 'success',
-        targetType: 'user',
-        targetId: user.id,
-        ip: req.ip,
-        metadata: { previousSession: session.id },
-      });
-      return createSession(tx, app.config, user.id, meta(req), now);
-    });
-    setSessionCookie(app, reply, s.token);
-    return reply.status(204).send();
-  });
+      setSessionCookie(app, reply, s.token);
+      return reply.status(204).send();
+    },
+  );
 
   app.post(
     '/password-reset/confirm',
     { config: { csrf: false, rateLimit: { max: 10, timeWindow: '1 minute' } } },
     async (req, reply) => {
       const body = PasswordResetConfirmRequest.parse(req.body);
-      const now = Date.now();
+      const tokenHash = sha256(body.token);
+      const invalid = () => {
+        writeAudit(app.db, {
+          actorId: null,
+          action: 'auth.password_reset',
+          outcome: 'failure',
+          ip: req.ip,
+        });
+        return new ApiError('VALIDATION_FAILED', 'Invalid or expired reset token', [
+          { path: 'token', message: 'Invalid or expired reset token' },
+        ]);
+      };
+      // Validate before paying for the hash, so junk tokens are cheap to reject.
+      const live = app.db
+        .select({ id: passwordResetTokens.id })
+        .from(passwordResetTokens)
+        .where(
+          and(
+            eq(passwordResetTokens.tokenHash, tokenHash),
+            isNull(passwordResetTokens.usedAt),
+            gt(passwordResetTokens.expiresAt, new Date()),
+          ),
+        )
+        .get();
+      if (!live) throw invalid();
       const passwordHash = await hashPassword(body.newPassword);
-      const userId = app.db.transaction((tx) => {
+      const now = Date.now();
+      const result = app.db.transaction((tx) => {
+        // Conditional consume: only one concurrent confirm can flip used_at.
         const t = tx
-          .select()
-          .from(passwordResetTokens)
+          .update(passwordResetTokens)
+          .set({ usedAt: new Date(now) })
           .where(
             and(
-              eq(passwordResetTokens.tokenHash, sha256(body.token)),
+              eq(passwordResetTokens.id, live.id),
               isNull(passwordResetTokens.usedAt),
               gt(passwordResetTokens.expiresAt, new Date(now)),
             ),
           )
+          .returning({ userId: passwordResetTokens.userId, issuedBy: passwordResetTokens.issuedBy })
           .get();
         if (!t) return null;
-        tx.update(passwordResetTokens)
-          .set({ usedAt: new Date(now) })
-          .where(eq(passwordResetTokens.id, t.id))
-          .run();
         tx.update(users)
           .set({
             passwordHash,
@@ -263,19 +310,9 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
           ip: req.ip,
           metadata: { issuedBy: t.issuedBy },
         });
-        return t.userId;
+        return t;
       });
-      if (!userId) {
-        writeAudit(app.db, {
-          actorId: null,
-          action: 'auth.password_reset',
-          outcome: 'failure',
-          ip: req.ip,
-        });
-        throw new ApiError('VALIDATION_FAILED', 'Invalid or expired reset token', [
-          { path: 'token', message: 'Invalid or expired reset token' },
-        ]);
-      }
+      if (!result) throw invalid();
       return reply.status(204).send();
     },
   );

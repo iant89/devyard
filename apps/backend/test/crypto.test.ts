@@ -23,3 +23,20 @@ describe('crypto helpers', () => {
     expect(a[14]).toBe('7');
   });
 });
+
+describe('scrypt cost', () => {
+  it('defaults to N=2^16 and the test knob only changes new hashes', async () => {
+    const { configureScrypt, DEFAULT_SCRYPT_N, hashPassword, verifyPassword } =
+      await import('../src/lib/crypto.js');
+    expect(DEFAULT_SCRYPT_N).toBe(2 ** 16);
+    configureScrypt();
+    const strong = await hashPassword('some long password');
+    expect(strong.split('$')[1]).toBe(String(2 ** 16));
+    configureScrypt({ N: 1024 });
+    const weak = await hashPassword('some long password');
+    expect(weak.split('$')[1]).toBe('1024');
+    expect(await verifyPassword('some long password', strong)).toBe(true);
+    expect(() => configureScrypt({ N: 1000 })).toThrow();
+    configureScrypt();
+  });
+});

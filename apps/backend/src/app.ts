@@ -6,6 +6,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type { AppConfig } from './config/index.js';
 import { openDatabase, runMigrations, type Db } from './db/client.js';
 import { seedRbac } from './db/seed.js';
+import { configureScrypt } from './lib/crypto.js';
 import { registerErrorHandling } from './lib/errors.js';
 import { newId } from './lib/ids.js';
 import { authPlugin } from './modules/auth/plugin.js';
@@ -35,6 +36,7 @@ export async function buildApp(
   config: AppConfig,
   opts: BuildOptions = {},
 ): Promise<FastifyInstance> {
+  configureScrypt({ N: config.env === 'test' ? config.scryptN : undefined });
   const app = Fastify({
     logger: {
       level: config.logLevel,
@@ -47,7 +49,8 @@ export async function buildApp(
       ...(opts.logStream ? { stream: opts.logStream } : {}),
     },
     genReqId: () => newId(),
-    trustProxy: true, // behind Caddy (spec §13)
+    // Off unless DEVYARD_TRUST_PROXY lists the proxy (Caddy, spec §13); otherwise X-Forwarded-For is ignored.
+    trustProxy: config.trustProxy === false ? false : config.trustProxy,
   });
 
   const { db, sqlite } = openDatabase(config.dbPath);
