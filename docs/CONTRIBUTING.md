@@ -37,8 +37,8 @@ Types: `feat`, `fix`, `docs`, `chore`, `ci`, `refactor`, `test`, `perf`, `build`
   Migrations, config changes, breaking changes.
   ```
 - **Required before merge:**
-  - CI (`check` workflow: typecheck, lint, format, tests, audit) is green.
-  - Code review approved by the **Tech Lead** (PR comment).
+  - CI (`check` workflow: typecheck, lint, format, tests, audit, plus `e2e` where present) is green.
+  - Code review approved by the **Tech Lead** (PR comment). Docs-only PRs skip this step (see below).
   - Integration/repo-health approval by the **Repository Maintainer** (PR comment): no secrets, no generated or oversized files, sane lockfile, migrations included.
 - **Merge method:** squash merge by default. Use a merge commit only for `release/` branches when individual commits must be kept.
 - Never commit `.env` files, databases, `node_modules`, `dist`, or credentials. Use `.env.example` for configuration keys.
@@ -62,4 +62,12 @@ Ian approved these rules for `main`, and they are now in effect:
 
 - The **Tech Lead** reviews the code and approves it in a PR comment.
 - The **Repository Maintainer** reviews integration and repo health (secrets, generated files, lockfile, migrations) and approves in a PR comment.
-- Once both approvals are posted and CI `check` is green, the Maintainer squash-merges.
+- Once both approvals are posted and CI is green, the Maintainer squash-merges.
+
+### Docs-only PRs (per Ian)
+
+A PR is **docs-only** when it changes only documentation: `*.md` files, `docs/`, and `design/` assets. A PR is not docs-only if it touches any code, config, CI workflow, lockfile, or `package.json`.
+
+- A docs-only PR needs only the **Repository Maintainer's** integration check (PR comment) and green CI. No Tech Lead review is required.
+- Every other PR still needs approval comments from both the Tech Lead and the Maintainer.
+- If it's unclear whether a PR is docs-only, treat it as a full PR.
