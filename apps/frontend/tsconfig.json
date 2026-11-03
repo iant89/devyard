@@ -9,5 +9,5 @@
     "declaration": false,
     "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom", "node"]
   },
-  "include": ["src", "e2e", "vite.config.ts", "playwright.config.ts"]
+  "include": ["src", "e2e", "e2e-smoke", "vite.config.ts", "playwright.config.ts", "playwright.smoke.config.ts"]
 }
