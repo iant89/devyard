@@ -1,4 +1,4 @@
-import { useMemo, useState, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { FolderKanban, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import {
@@ -19,6 +19,7 @@ import {
 import mark24 from '../assets/devyard-mark-24.svg';
 import { useAuth } from '../auth/AuthProvider';
 import { APP_VERSION } from '../config';
+import { onProjectsChanged } from '../lib/projectsBus';
 import { NAVIGATION, filterNavigation, findActive, type NavNode } from './navigation';
 
 const ROLE_LABEL: Record<string, string> = {
@@ -43,18 +44,37 @@ const HELP_MENU: MenuEntry[] = [
 ];
 
 function ProjectContext({ fullWidth = false }: { fullWidth?: boolean }) {
-  // Phase 1 B5: only "All projects" until the projects API (B4/B6) lands.
-  const [value, setValue] = useState<string | null>('all');
+  const { api } = useAuth();
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const current = /^\/projects\/(?!mine$|shared$)([^/]+)/.exec(pathname)?.[1] ?? 'all';
+  const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => {
+    let live = true;
+    const load = () =>
+      api
+        .listProjects({ scope: 'all', pageSize: 100, sort: 'name' })
+        .then((r) => live && setProjects(r.data.map((p) => ({ id: p.id, name: p.name }))))
+        .catch(() => undefined); // the switcher is a convenience; pages report their own errors
+    load();
+    const off = onProjectsChanged(load);
+    return () => {
+      live = false;
+      off();
+    };
+  }, [api]);
+  const options = [
+    { value: 'all', label: 'All projects', icon: <FolderKanban size={16} aria-hidden /> },
+    ...projects.map((p) => ({ value: p.id, label: p.name })),
+  ];
   return (
     <div className={fullWidth ? undefined : 'dy-header-context'}>
       <Select
         aria-label="Project context"
         size="md"
-        value={value}
-        onChange={setValue}
-        options={[
-          { value: 'all', label: 'All projects', icon: <FolderKanban size={16} aria-hidden /> },
-        ]}
+        value={options.some((o) => o.value === current) ? current : 'all'}
+        onChange={(v) => navigate(!v || v === 'all' ? '/projects' : `/projects/${v}`)}
+        options={options}
       />
     </div>
   );

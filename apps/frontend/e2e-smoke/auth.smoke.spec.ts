@@ -37,6 +37,18 @@ test('bootstrap, log in and log out against the real backend', async ({ page }) 
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
 
+  // B6a: create a project through the dialog; it opens on its page and shows in the list.
+  await page.getByRole('button', { name: 'New project' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Create project' });
+  await dialog.getByLabel(/^Project name/).fill('smoke-project');
+  await dialog.getByLabel('Description').fill('Created by the smoke test');
+  await dialog.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('heading', { name: 'smoke-project', level: 1 })).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Project members' })).toContainText('Owner');
+  await page.goto('/projects');
+  await expect(page.getByText('1 project', { exact: true })).toBeVisible();
+  await expect(page.getByRole('table', { name: 'Projects' })).toContainText('smoke-project');
+
   await signOut();
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();

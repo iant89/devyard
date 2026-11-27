@@ -8,6 +8,8 @@ import { PasswordResetInfo } from './auth/PasswordResetInfo';
 import { DevyardShell } from './shell/DevyardShell';
 import { DashboardPage } from './pages/DashboardPage';
 import { PlaceholderPage } from './pages/PlaceholderPage';
+import { ProjectPage } from './projects/ProjectPage';
+import { ProjectsPage } from './projects/ProjectsPage';
 import { NAVIGATION, filterNavigation, flattenNavigation } from './shell/navigation';
 
 export function App() {
@@ -47,11 +49,15 @@ export function App() {
 
   const allowed = flattenNavigation(
     filterNavigation(NAVIGATION, status.auth.user.permissions),
-  ).filter((n) => n.path !== '/');
+  ).filter((n) => n.path !== '/' && !n.path.startsWith('/projects'));
   return (
     <DevyardShell>
       <Routes>
         <Route path="/" element={<DashboardPage />} />
+        <Route path="/projects" element={<ProjectsPage scope="all" />} />
+        <Route path="/projects/mine" element={<ProjectsPage scope="mine" />} />
+        <Route path="/projects/shared" element={<ProjectsPage scope="shared" />} />
+        <Route path="/projects/:id" element={<ProjectPage />} />
         {[...new Set(allowed.map((n) => n.path))].map((p) => (
           <Route key={p} path={p} element={<PlaceholderPage />} />
         ))}

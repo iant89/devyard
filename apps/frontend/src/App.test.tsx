@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
-import { ThemeProvider } from '@enterprise-ui/react';
+import { ThemeProvider, ToastProvider } from '@enterprise-ui/react';
 import { ApiClient } from './api/client';
 import { AuthProvider } from './auth/AuthProvider';
 import { App } from './App';
@@ -41,15 +41,24 @@ const unauth = () =>
 
 type Handler = (url: string, init?: RequestInit) => Response;
 function setup(handler: Handler, path = '/') {
-  const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => handler(String(input), init));
+  // Pages that list projects (dashboard counts, header switcher) get an empty list by default.
+  const withProjects: Handler = (url, init) =>
+    /\/api\/v1\/projects(\?|$)/.test(url)
+      ? res(200, { data: [], meta: { page: 1, pageSize: 25, total: 0 } })
+      : handler(url, init);
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) =>
+    withProjects(String(input), init),
+  );
   const api = new ApiClient({ fetch });
   render(
     <ThemeProvider theme="dark">
-      <MemoryRouter initialEntries={[path]}>
-        <AuthProvider api={api}>
-          <App />
-        </AuthProvider>
-      </MemoryRouter>
+      <ToastProvider>
+        <MemoryRouter initialEntries={[path]}>
+          <AuthProvider api={api}>
+            <App />
+          </AuthProvider>
+        </MemoryRouter>
+      </ToastProvider>
     </ThemeProvider>,
   );
   return fetch;

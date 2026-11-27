@@ -11,15 +11,29 @@ import {
   AuthState,
   BootstrapStatus,
   ErrorResponse,
+  Project,
+  ProjectMember,
   SessionInfo,
   dataEnvelope,
+  listEnvelope,
   type ErrorCode,
   type LoginRequest,
   type BootstrapRequest,
+  type CreateProjectRequest,
 } from '@devyard/contracts';
 import { z } from 'zod';
 
 export type BootstrapInput = z.input<typeof BootstrapRequest>;
+export type CreateProjectInput = z.input<typeof CreateProjectRequest>;
+
+export interface ProjectListParams {
+  scope?: 'all' | 'mine' | 'shared';
+  q?: string;
+  /** `field` or `-field`; see PROJECT_SORT_FIELDS. */
+  sort?: string;
+  page?: number;
+  pageSize?: number;
+}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -56,6 +70,9 @@ export interface ApiClientOptions {
 const BootstrapEnvelope = dataEnvelope(BootstrapStatus);
 const AuthEnvelope = dataEnvelope(AuthState);
 const SessionsEnvelope = dataEnvelope(z.array(SessionInfo));
+const ProjectEnvelope = dataEnvelope(Project);
+const ProjectListEnvelope = listEnvelope(Project);
+const MembersEnvelope = dataEnvelope(z.array(ProjectMember));
 
 export class ApiClient {
   private csrfToken: string | null = null;
@@ -162,6 +179,29 @@ export class ApiClient {
   }
   async sessions(): Promise<SessionInfo[]> {
     return (await this.request('GET', '/auth/sessions', SessionsEnvelope)).data;
+  }
+
+  // ---- projects (plan §6.4) ----
+  async listProjects(params: ProjectListParams = {}) {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params))
+      if (v !== undefined && v !== '') qs.set(k, String(v));
+    const query = qs.size ? `?${qs.toString()}` : '';
+    return this.request('GET', `/projects${query}`, ProjectListEnvelope);
+  }
+  async getProject(id: string): Promise<Project> {
+    return (await this.request('GET', `/projects/${encodeURIComponent(id)}`, ProjectEnvelope)).data;
+  }
+  async createProject(input: CreateProjectInput): Promise<Project> {
+    return (await this.request('POST', '/projects', ProjectEnvelope, input)).data;
+  }
+  async deleteProject(id: string): Promise<void> {
+    await this.request('DELETE', `/projects/${encodeURIComponent(id)}`, null);
+  }
+  async projectMembers(id: string): Promise<ProjectMember[]> {
+    return (
+      await this.request('GET', `/projects/${encodeURIComponent(id)}/members`, MembersEnvelope)
+    ).data;
   }
 
   private adopt(state: AuthState): AuthState {

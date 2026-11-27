@@ -1,104 +1,11 @@
-import { expect, test, type Page } from '@playwright/test';
-import AxeBuilder from '@axe-core/playwright';
+import { expect, test } from '@playwright/test';
+import { ADMIN, check, DESKTOP, DEVELOPER, mockApi, MOBILE } from './support';
 
 /**
  * Login/bootstrap/shell flows against the built app with the API mocked (page.route).
  * Each state is screenshotted (desktop 1440×900, mobile 390×844 — DY-D1 §0.1) and axe-checked.
  * Screenshots go to $SCREENSHOT_DIR (default ./test-results/screens).
  */
-const SHOTS = process.env.SCREENSHOT_DIR ?? 'test-results/screens';
-const DESKTOP = { width: 1440, height: 900 };
-const MOBILE = { width: 390, height: 844 };
-
-const iso = '2026-11-01T00:00:00.000Z';
-const authState = (permissions: string[], roles: string[]) => ({
-  data: {
-    user: {
-      id: 'u1',
-      username: 'ian',
-      email: 'ian@devyard.local',
-      displayName: 'Ian Thomas',
-      status: 'active',
-      roles,
-      permissions,
-      createdAt: iso,
-      lastLoginAt: iso,
-    },
-    session: {
-      id: 's1',
-      createdAt: iso,
-      lastSeenAt: iso,
-      expiresAt: iso,
-      userAgent: null,
-      ip: null,
-      current: true,
-    },
-    csrfToken: 'csrf-token',
-  },
-});
-const ADMIN = authState(
-  [
-    'users.read',
-    'users.manage',
-    'projects.create',
-    'projects.read_all',
-    'projects.manage_all',
-    'admin.access',
-    'audit.read',
-  ],
-  ['admin'],
-);
-const DEVELOPER = authState(['projects.create', 'users.read'], ['developer']);
-const UNAUTH = { error: { code: 'UNAUTHENTICATED', message: 'Not signed in', requestId: 'r1' } };
-
-async function mockApi(
-  page: Page,
-  opts: { me?: object | null; bootstrapRequired?: boolean; login?: 'ok' | 'fail' | 'hang' } = {},
-) {
-  let signedIn = opts.me ?? null;
-  await page.route('**/api/v1/auth/**', async (route) => {
-    const url = new URL(route.request().url());
-    const method = route.request().method();
-    const json = (status: number, body?: unknown) =>
-      route.fulfill({
-        status,
-        contentType: 'application/json',
-        body: body === undefined ? '' : JSON.stringify(body),
-      });
-    switch (`${method} ${url.pathname}`) {
-      case 'GET /api/v1/auth/me':
-        return signedIn ? json(200, signedIn) : json(401, UNAUTH);
-      case 'GET /api/v1/auth/bootstrap':
-        return json(200, { data: { required: opts.bootstrapRequired ?? false } });
-      case 'POST /api/v1/auth/bootstrap':
-        signedIn = ADMIN;
-        return json(201, ADMIN);
-      case 'POST /api/v1/auth/login':
-        if (opts.login === 'hang') return; // never resolves → loading state
-        if (opts.login === 'fail') return json(401, UNAUTH);
-        signedIn = ADMIN;
-        return json(200, ADMIN);
-      case 'POST /api/v1/auth/logout':
-        signedIn = null;
-        return route.fulfill({ status: 204 });
-    }
-    return json(404, { error: { code: 'NOT_FOUND', message: 'x', requestId: 'r' } });
-  });
-}
-
-async function check(page: Page, name: string) {
-  await page.waitForTimeout(250); // let transitions settle
-  await page.screenshot({ path: `${SHOTS}/${name}.png` });
-  const results = await new AxeBuilder({
-    // @axe-core/playwright bundles its own playwright-core typings (1.64) — runtime-compatible.
-    page: page as unknown as ConstructorParameters<typeof AxeBuilder>[0]['page'],
-  }).analyze();
-  const bad = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
-  expect(bad.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual(
-    [],
-  );
-}
-
 test.describe('desktop', () => {
   test.use({ viewport: DESKTOP });
 
@@ -167,7 +74,11 @@ test.describe('desktop', () => {
 
     await nav.getByRole('link', { name: 'My Projects' }).click();
     await expect(page).toHaveURL(/\/projects\/mine$/);
-    await expect(page.getByRole('heading', { name: 'My Projects', level: 1 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Projects', level: 1 })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Mine', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
 
     await page.getByRole('button', { name: /Ian Thomas/ }).click();
     await page.getByRole('menuitem', { name: 'Sign out' }).click();
@@ -216,6 +127,6 @@ test.describe('mobile', () => {
     await drawer.getByRole('button', { name: 'Projects' }).click();
     await drawer.getByRole('link', { name: 'All Projects' }).click();
     await expect(drawer).toHaveCount(0);
-    await expect(page.getByRole('heading', { name: 'All Projects', level: 1 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Projects', level: 1 })).toBeVisible();
   });
 });
