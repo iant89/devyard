@@ -4,6 +4,7 @@ Usage: python3 build.py [name ...]"""
 import os, sys, subprocess
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 from screens import S
+import screens_b6b  # noqa: F401  (adds B6b frames to S)
 OUT = os.path.join(HERE, 'html'); os.makedirs(OUT, exist_ok=True)
 CHROME = os.environ.get('CHROME', 'google-chrome')
 only = sys.argv[1:]

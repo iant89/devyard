@@ -50,3 +50,32 @@ Sources: `src/styles.css` (tokens + component styles), `src/lib.py` (icons, shel
 ## Brand mark update (2026-11-02)
 - Swapped the Option A mark for the new primary mark (E3, open container + amber chevron) by regenerating `brand/devyard-mark-24.svg` (header) and `brand/devyard-mark-40.svg` (login). `src/lib.py` already inlines those files; no source changes.
 - Re-rendered all 16 mockups with `python3 src/build.py`. No other mockup changes. Pre-swap copies kept in `/tmp/mockups-backup-*` on the render box; Option A marks archived in `brand/options/A/`.
+
+## B6b mockups (2026-11-27), awaiting Ian's approval
+Source: `src/screens_b6b.py`, registered in `build.py`. Rebuild with `CHROME=<chromium> python3 build.py 07-project-settings …`. Icons added to `src/icons.json`: archive, copy, user-plus, mail, laptop, smartphone, arrow-right-left, user-x, key, pencil. Existing icons are unchanged.
+
+Every control maps to an existing Phase 1 endpoint (plan §6.2–6.4). Nothing here needs new backend work, except where Q4 says otherwise.
+
+| File | Size | Screen | API |
+|---|---|---|---|
+| 07-project-settings.png | 1440×900 | Project ▸ **Settings** tab: General form, Members table with inline role select, role legend, Danger zone (archive, transfer, delete) | `PATCH /projects/:id`, `GET/PATCH/DELETE /projects/:id/members`, `POST /projects/:id/transfer`, `DELETE /projects/:id` |
+| 07-project-add-member.png | 1440×900 | **Add member** dialog: user search (active users, name and @username only, no emails for non-admins), role select, Viewer-cap note | `GET /users?q=` (public summary), `POST /projects/:id/members` |
+| 07-project-transfer.png | 1440×900 | **Transfer ownership** confirm: new owner select, type-the-slug confirmation | `POST /projects/:id/transfer` |
+| 08-admin-users.png | 1440×900 | Administration ▸ **Users**: search, status and role filters, sort, table, row menu (edit, issue reset, view activity, disable, delete) | `GET /users`, `PATCH /users/:id`, `DELETE /users/:id`, `GET /users/:id/activity` |
+| 08-admin-user-create.png | 1440×900 | **New user** dialog: name, username, email, roles, initial password (show and generate) | `POST /users` |
+| 08-admin-user-reset.png | 1440×900 | **Password reset issued**: one-time link with copy, expiry (1 h), shown once | `POST /users/:id/password-reset` |
+| 09-account.png | 1440×900 | **Account**: profile (display name), email change (needs current password), password change, active sessions with revoke and "sign out other sessions" | `PATCH /users/:id` (self), `POST /auth/password`, `GET/DELETE /auth/sessions[/:id]` |
+| 09-account-mobile.png | 390×844 | Account on mobile: Profile / Security / Sessions segments, Sessions shown | same |
+
+### Design decisions
+- Project **Settings** is a tab of the project page (ObjectPage), not a separate route, which matches Screen 6. Members live there too: one place to manage a project.
+- The **slug is read-only** after creation (the API has no slug update). Name, description, language and framework can be edited.
+- **Roles in the members table** use an inline select. The owner row shows a badge instead, because ownership only changes through Transfer. Maintainer options are only offered to the owner, which the API enforces.
+- **Destructive actions** are grouped in a Danger zone. Transfer uses type-to-confirm. Delete reuses the B6a confirm dialog.
+- **User search for sharing** shows only display name and @username, because the API hides emails, statuses and roles from callers without `users.manage` (PR #4 review).
+- **Password reset** follows D3: there's no email. The admin copies a one-time link that's shown once.
+
+### Open questions for Ian
+- **Q4:** The reset link needs a small "Set a new password" page at `/password-reset?token=…`, using the login card layout. The confirm endpoint already exists. OK to build it without a separate mockup?
+- **Q5:** Should "View activity" (admin) be a side panel on the Users page, or its own page under Administration ▸ Users ▸ *name*?
+- **Q6:** On mobile, Admin Users would reuse the B6a mobile list pattern (name, @username · role · status). Is a separate mockup needed?
