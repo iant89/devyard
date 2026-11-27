@@ -34,6 +34,22 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * True for a SQLite UNIQUE / PRIMARY KEY violation (better-sqlite3 `SqliteError`, possibly wrapped
+ * by Drizzle as `cause`). Two requests racing past an "already exists?" check end up here.
+ */
+export function isUniqueViolation(err: unknown): boolean {
+  for (
+    let e: unknown = err, depth = 0;
+    e && depth < 3;
+    e = (e as { cause?: unknown }).cause, depth++
+  ) {
+    const code = (e as { code?: unknown }).code;
+    if (code === 'SQLITE_CONSTRAINT_UNIQUE' || code === 'SQLITE_CONSTRAINT_PRIMARYKEY') return true;
+  }
+  return false;
+}
+
 /** Spec §17 structured error handling: every error leaves as ErrorResponse. */
 export function registerErrorHandling(app: FastifyInstance): void {
   app.setNotFoundHandler((req, reply) => {
@@ -47,6 +63,8 @@ export function registerErrorHandling(app: FastifyInstance): void {
     let apiErr: ApiError;
     if (err instanceof ApiError) apiErr = err;
     else if (err instanceof BusyError) apiErr = new ApiError('RATE_LIMITED', err.message);
+    else if (isUniqueViolation(err))
+      apiErr = new ApiError('CONFLICT', 'Conflicts with an existing record; reload and retry');
     else if (err instanceof ZodError)
       apiErr = new ApiError(
         'VALIDATION_FAILED',
