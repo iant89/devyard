@@ -36,6 +36,7 @@ describe('projects', () => {
       slug: 'my-app',
       myRole: 'owner',
       ownerId: a.ids.developer,
+      owner: { id: a.ids.developer, username: expect.any(String), displayName: expect.any(String) },
       archived: false,
     });
     expect(p.projectType).toBe('empty');
@@ -215,7 +216,11 @@ describe('projects', () => {
       newOwnerId: devBId,
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().data).toMatchObject({ ownerId: devBId, myRole: 'maintainer' });
+    expect(res.json().data).toMatchObject({
+      ownerId: devBId,
+      owner: { id: devBId, username: 'devb' },
+      myRole: 'maintainer',
+    });
     const roles = Object.fromEntries(
       app.db
         .select()

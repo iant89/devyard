@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { Id, IsoDateTime, PageQuery } from './common.js';
+import { UserSummary } from './users.js';
 
 /** Spec §6.1 creation sources. Phase 1 implements only 'empty'; others are reserved (Phases 2–4). */
 export const ProjectTemplate = z.enum([
@@ -28,6 +29,8 @@ export const Project = z.object({
   name: z.string(),
   description: z.string(),
   ownerId: Id,
+  /** The owner's display info, so lists can show a name without `users.manage`. */
+  owner: UserSummary,
   projectType: ProjectTemplate,
   primaryLanguage: z.string().nullable(),
   framework: z.string().nullable(),

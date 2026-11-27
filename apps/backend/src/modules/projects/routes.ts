@@ -79,7 +79,7 @@ export const projectsRoutes: FastifyPluginAsync = async (app) => {
     });
   const respond = (p: Principal, projectId: string) => {
     const row = findLiveProject(db, projectId)!;
-    return { data: toProject(row, callerView(db, p, projectId)) };
+    return { data: toProject(db, row, callerView(db, p, projectId)) };
   };
 
   app.get('/', { config: { auth: true } }, async (req) => {
@@ -124,7 +124,7 @@ export const projectsRoutes: FastifyPluginAsync = async (app) => {
       .offset((q.page - 1) * q.pageSize)
       .all();
     return {
-      data: rows.map((r) => toProject(r, callerView(db, p, r.id))),
+      data: rows.map((r) => toProject(db, r, callerView(db, p, r.id))),
       meta: { page: q.page, pageSize: q.pageSize, total },
     };
   });
