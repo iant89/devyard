@@ -207,6 +207,10 @@ test.describe('mobile', () => {
       .click();
     const drawer = page.getByRole('dialog', { name: 'Navigation' });
     await expect(drawer).toBeVisible();
+    await expect(drawer.getByText('Phase 1 · v0.1.0')).toBeInViewport();
+    const picker = await drawer.getByRole('combobox', { name: 'Project context' }).boundingBox();
+    const header = await drawer.getByText('Navigation', { exact: true }).boundingBox();
+    expect(picker!.y).toBeGreaterThan(header!.y + header!.height); // not clipped under the drawer header
     await check(page, '02-shell-mobile-nav-open');
 
     await drawer.getByRole('button', { name: 'Projects' }).click();

@@ -9,6 +9,7 @@
 import {
   API_PREFIX,
   AuthState,
+  BootstrapStatus,
   ErrorResponse,
   SessionInfo,
   dataEnvelope,
@@ -52,7 +53,7 @@ export interface ApiClientOptions {
   onUnauthenticated?: () => void;
 }
 
-export const BootstrapStatus = dataEnvelope(z.object({ required: z.boolean() }));
+const BootstrapEnvelope = dataEnvelope(BootstrapStatus);
 const AuthEnvelope = dataEnvelope(AuthState);
 const SessionsEnvelope = dataEnvelope(z.array(SessionInfo));
 
@@ -83,6 +84,7 @@ export class ApiClient {
     path: string,
     schema: S | null,
     body?: unknown,
+    opts: { silent401?: boolean } = {},
   ): Promise<z.infer<S>> {
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -102,7 +104,13 @@ export class ApiClient {
 
     if (!res.ok) {
       const parsed = ErrorResponse.safeParse(await res.json().catch(() => null));
-      if (res.status === 401) this.unauthListeners.forEach((l) => l());
+      if (res.status === 401) {
+        // The session is gone: its CSRF token is useless now.
+        this.csrfToken = null;
+        // Auth endpoints answer 401 as a normal outcome (bad credentials, no session yet);
+        // only other endpoints mean "your session expired".
+        if (!opts.silent401) this.unauthListeners.forEach((l) => l());
+      }
       if (parsed.success) {
         const e = parsed.data.error;
         throw new ApiError(res.status, e.code, e.message, e.requestId, e.details ?? []);
@@ -123,20 +131,31 @@ export class ApiClient {
 
   // ---- auth (plan §6.2) ----
   async bootstrapStatus(): Promise<{ required: boolean }> {
-    return (await this.request('GET', '/auth/bootstrap', BootstrapStatus)).data;
+    return (
+      await this.request('GET', '/auth/bootstrap', BootstrapEnvelope, undefined, {
+        silent401: true,
+      })
+    ).data;
   }
   async bootstrap(input: BootstrapInput): Promise<AuthState> {
-    return this.adopt((await this.request('POST', '/auth/bootstrap', AuthEnvelope, input)).data);
+    return this.adopt(
+      (await this.request('POST', '/auth/bootstrap', AuthEnvelope, input, { silent401: true }))
+        .data,
+    );
   }
   async login(input: LoginRequest): Promise<AuthState> {
-    return this.adopt((await this.request('POST', '/auth/login', AuthEnvelope, input)).data);
+    return this.adopt(
+      (await this.request('POST', '/auth/login', AuthEnvelope, input, { silent401: true })).data,
+    );
   }
   async me(): Promise<AuthState> {
-    return this.adopt((await this.request('GET', '/auth/me', AuthEnvelope)).data);
+    return this.adopt(
+      (await this.request('GET', '/auth/me', AuthEnvelope, undefined, { silent401: true })).data,
+    );
   }
   async logout(): Promise<void> {
     try {
-      await this.request('POST', '/auth/logout', null);
+      await this.request('POST', '/auth/logout', null, undefined, { silent401: true });
     } finally {
       this.csrfToken = null;
     }

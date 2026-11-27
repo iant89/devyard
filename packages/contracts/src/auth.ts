@@ -67,3 +67,7 @@ export const BootstrapRequest = z.object({
   displayName: z.string().min(1).max(100),
   password: Password,
 });
+
+/** GET /api/v1/auth/bootstrap → `{ data: BootstrapStatus }` (plan §6.2). */
+export const BootstrapStatus = z.object({ required: z.boolean() });
+export type BootstrapStatus = z.infer<typeof BootstrapStatus>;

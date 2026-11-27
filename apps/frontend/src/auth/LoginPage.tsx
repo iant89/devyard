@@ -29,6 +29,11 @@ function describe(error: unknown): NonNullable<Failure> {
       };
     if (error.code === 'RATE_LIMITED')
       return { title: 'Too many attempts', body: 'Wait a minute before trying to sign in again.' };
+    if (error.code === 'VALIDATION_FAILED')
+      return {
+        title: 'Check your details',
+        body: 'Enter your username or email and your password.',
+      };
     if (error.code === 'NETWORK') return { title: 'Server unreachable', body: error.message };
   }
   return {

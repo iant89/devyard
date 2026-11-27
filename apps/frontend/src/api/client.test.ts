@@ -62,7 +62,26 @@ describe('ApiClient', () => {
     ).toBeUndefined();
   });
 
-  it('maps structured errors and signals 401', async () => {
+  it('auth endpoints do not signal session expiry on 401, but clear the CSRF token', async () => {
+    const onUnauthenticated = vi.fn();
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(json(200, { data: authState }))
+      .mockResolvedValueOnce(
+        json(401, { error: { code: 'UNAUTHENTICATED', message: 'x', requestId: 'r' } }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const api = new ApiClient({ fetch, onUnauthenticated });
+    await api.login({ login: 'ian', password: 'pw' });
+    await api.login({ login: 'ian', password: 'bad' }).catch(() => undefined);
+    expect(onUnauthenticated).not.toHaveBeenCalled();
+    await api.logout();
+    expect(
+      (fetch.mock.calls[2]![1]!.headers as Record<string, string>)['X-CSRF-Token'],
+    ).toBeUndefined();
+  });
+
+  it('maps structured errors and signals 401 on non-auth endpoints', async () => {
     const onUnauthenticated = vi.fn();
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
       json(401, {
@@ -70,7 +89,7 @@ describe('ApiClient', () => {
       }),
     );
     const api = new ApiClient({ fetch, onUnauthenticated });
-    const err = await api.login({ login: 'ian', password: 'x' }).catch((e: unknown) => e);
+    const err = await api.sessions().catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).code).toBe('UNAUTHENTICATED');
     expect((err as ApiError).requestId).toBe('r1');

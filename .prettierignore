@@ -4,3 +4,6 @@ coverage
 apps/backend/drizzle
 package-lock.json
 README.md
+docs/SPEC.md
+docs/PM-CHARTER.md
+design/

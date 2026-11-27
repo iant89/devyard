@@ -72,8 +72,26 @@ body {
   justify-content: space-between;
   gap: var(--eui-space-2);
 }
+.dy-nav-body,
+.dy-drawer-body {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+}
+.dy-drawer-body {
+  flex: 1;
+  min-height: 0;
+}
+.dy-nav-body > .dy-nav,
+.dy-drawer-body > .dy-nav {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
 .dy-drawer-context {
-  padding: 0 var(--eui-space-4) var(--eui-space-2);
+  flex: none;
+  padding: var(--eui-space-4) var(--eui-space-4) var(--eui-space-2);
 }
 .dy-header-context {
   width: 180px;

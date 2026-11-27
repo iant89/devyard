@@ -117,13 +117,14 @@ function NavTree({
 
   const collapsed = shell?.navCollapsed ?? false;
   return (
-    <>
+    <div className={isMobile ? 'dy-drawer-body' : 'dy-nav-body'}>
       {isMobile && (
         <div className="dy-drawer-context">
           <ProjectContext fullWidth />
         </div>
       )}
       <SideNavigation
+        className="dy-nav"
         activeId={activeId}
         onNavigate={onNavigate}
         collapsed={collapsed}
@@ -153,7 +154,7 @@ function NavTree({
           </NavigationGroup>
         ))}
       </SideNavigation>
-    </>
+    </div>
   );
 }
 
