@@ -11,7 +11,7 @@ import { and, asc, desc, eq, exists, isNotNull, isNull, ne, or, sql, type SQL } 
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { projectMembers, projects } from '../../db/schema.js';
-import { ApiError } from '../../lib/errors.js';
+import { ApiError, isUniqueViolation } from '../../lib/errors.js';
 import { newId } from '../../lib/ids.js';
 import { writeAudit } from '../audit/service.js';
 import {
@@ -67,8 +67,9 @@ export const projectsRoutes: FastifyPluginAsync = async (app) => {
     action: string,
     projectId: string,
     metadata?: Record<string, unknown>,
+    on: Pick<typeof db, 'insert'> = db,
   ) =>
-    writeAudit(db, {
+    writeAudit(on, {
       actorId: req.auth!.user.id,
       action,
       outcome: 'success',
@@ -79,7 +80,7 @@ export const projectsRoutes: FastifyPluginAsync = async (app) => {
     });
   const respond = (p: Principal, projectId: string) => {
     const row = findLiveProject(db, projectId)!;
-    return { data: toProject(row, callerView(db, p, projectId)) };
+    return { data: toProject(db, row, callerView(db, p, projectId)) };
   };
 
   app.get('/', { config: { auth: true } }, async (req) => {
@@ -124,7 +125,7 @@ export const projectsRoutes: FastifyPluginAsync = async (app) => {
       .offset((q.page - 1) * q.pageSize)
       .all();
     return {
-      data: rows.map((r) => toProject(r, callerView(db, p, r.id))),
+      data: rows.map((r) => toProject(db, r, callerView(db, p, r.id))),
       meta: { page: q.page, pageSize: q.pageSize, total },
     };
   });
@@ -160,8 +161,8 @@ export const projectsRoutes: FastifyPluginAsync = async (app) => {
       tx.insert(projectMembers)
         .values({ projectId: id, userId: p.id, role: 'owner', addedBy: p.id })
         .run();
+      audit(req, 'project.create', id, { name: body.name }, tx);
     });
-    audit(req, 'project.create', id, { name: body.name });
     return reply.status(201).send(respond(p, id));
   });
 
@@ -182,14 +183,16 @@ export const projectsRoutes: FastifyPluginAsync = async (app) => {
       if (body[k] !== undefined) (patch as Record<string, unknown>)[k] = body[k];
     if (body.archived !== undefined)
       patch.archivedAt = body.archived ? (before.archivedAt ?? now) : null;
-    db.update(projects).set(patch).where(eq(projects.id, id)).run();
     const archiveChange =
       body.archived !== undefined && body.archived !== !!before.archivedAt
         ? body.archived
           ? 'project.archive'
           : 'project.unarchive'
         : null;
-    audit(req, archiveChange ?? 'project.update', id, { fields: Object.keys(body) });
+    db.transaction((tx) => {
+      tx.update(projects).set(patch).where(eq(projects.id, id)).run();
+      audit(req, archiveChange ?? 'project.update', id, { fields: Object.keys(body) }, tx);
+    });
     return respond(me(req), id);
   });
 
@@ -197,8 +200,10 @@ export const projectsRoutes: FastifyPluginAsync = async (app) => {
     const { id } = IdParams.parse(req.params);
     requireProjectRole(db, me(req), id, 'owner');
     const now = new Date();
-    db.update(projects).set({ deletedAt: now, updatedAt: now }).where(eq(projects.id, id)).run();
-    audit(req, 'project.delete', id);
+    db.transaction((tx) => {
+      tx.update(projects).set({ deletedAt: now, updatedAt: now }).where(eq(projects.id, id)).run();
+      audit(req, 'project.delete', id, undefined, tx);
+    });
     return reply.status(204).send();
   });
 
@@ -216,16 +221,31 @@ export const projectsRoutes: FastifyPluginAsync = async (app) => {
       throw new ApiError('FORBIDDEN', 'Only the owner can add maintainers');
     const target = findLiveUser(db, body.userId);
     if (!target) throw new ApiError('NOT_FOUND', 'User not found');
-    if (memberRow(db, id, body.userId)) throw new ApiError('CONFLICT', 'User is already a member');
+    if (target.status !== 'active')
+      throw new ApiError('VALIDATION_FAILED', 'Only active users can be added to a project', [
+        { path: 'userId', message: 'Only active users can be added to a project' },
+      ]);
     const { role, capped } = capRoleForUser(db, body.userId, body.role);
-    db.insert(projectMembers)
-      .values({ projectId: id, userId: body.userId, role, addedBy: req.auth!.user.id })
-      .run();
-    audit(req, 'project.member_add', id, {
-      userId: body.userId,
-      role,
-      ...(capped ? { requestedRole: body.role, capped } : {}),
-    });
+    const conflict = () => new ApiError('CONFLICT', 'User is already a member');
+    if (memberRow(db, id, body.userId)) throw conflict();
+    try {
+      db.transaction((tx) => {
+        tx.insert(projectMembers)
+          .values({ projectId: id, userId: body.userId, role, addedBy: req.auth!.user.id })
+          .run();
+        audit(
+          req,
+          'project.member_add',
+          id,
+          { userId: body.userId, role, ...(capped ? { requestedRole: body.role, capped } : {}) },
+          tx,
+        );
+      });
+    } catch (err) {
+      // A concurrent add of the same user can pass the check above; the PK turns it into a 409.
+      if (isUniqueViolation(err)) throw conflict();
+      throw err;
+    }
     const m = listMembers(db, id).find((x) => x.userId === body.userId)!;
     return reply.status(201).send({ data: { ...m, roleCapped: capped } });
   });
@@ -241,15 +261,23 @@ export const projectsRoutes: FastifyPluginAsync = async (app) => {
     if ((current.role === 'maintainer' || body.role === 'maintainer') && myRole !== 'owner')
       throw new ApiError('FORBIDDEN', 'Only the owner can change maintainers');
     const { role, capped } = capRoleForUser(db, userId, body.role);
-    db.update(projectMembers)
-      .set({ role, updatedAt: new Date() })
-      .where(and(eq(projectMembers.projectId, id), eq(projectMembers.userId, userId)))
-      .run();
-    audit(req, 'project.member_update', id, {
-      userId,
-      from: current.role,
-      role,
-      ...(capped ? { requestedRole: body.role, capped } : {}),
+    db.transaction((tx) => {
+      tx.update(projectMembers)
+        .set({ role, updatedAt: new Date() })
+        .where(and(eq(projectMembers.projectId, id), eq(projectMembers.userId, userId)))
+        .run();
+      audit(
+        req,
+        'project.member_update',
+        id,
+        {
+          userId,
+          from: current.role,
+          role,
+          ...(capped ? { requestedRole: body.role, capped } : {}),
+        },
+        tx,
+      );
     });
     return {
       data: { ...listMembers(db, id).find((x) => x.userId === userId)!, roleCapped: capped },
@@ -269,12 +297,17 @@ export const projectsRoutes: FastifyPluginAsync = async (app) => {
       throw new ApiError('CONFLICT', 'The owner cannot be removed; transfer ownership first');
     if (!leaving && current.role === 'maintainer' && myRole !== 'owner')
       throw new ApiError('FORBIDDEN', 'Only the owner can remove maintainers');
-    db.delete(projectMembers)
-      .where(and(eq(projectMembers.projectId, id), eq(projectMembers.userId, userId)))
-      .run();
-    audit(req, leaving ? 'project.member_leave' : 'project.member_remove', id, {
-      userId,
-      role: current.role,
+    db.transaction((tx) => {
+      tx.delete(projectMembers)
+        .where(and(eq(projectMembers.projectId, id), eq(projectMembers.userId, userId)))
+        .run();
+      audit(
+        req,
+        leaving ? 'project.member_leave' : 'project.member_remove',
+        id,
+        { userId, role: current.role },
+        tx,
+      );
     });
     return reply.status(204).send();
   });
@@ -310,8 +343,8 @@ export const projectsRoutes: FastifyPluginAsync = async (app) => {
         .set({ role: 'maintainer', updatedAt: now })
         .where(and(eq(projectMembers.projectId, id), eq(projectMembers.userId, prevOwner)))
         .run();
+      audit(req, 'project.transfer', id, { from: prevOwner, to: newOwnerId, addedAsMember }, tx);
     });
-    audit(req, 'project.transfer', id, { from: prevOwner, to: newOwnerId, addedAsMember });
     return respond(me(req), id);
   });
 };

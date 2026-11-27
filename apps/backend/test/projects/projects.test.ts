@@ -1,5 +1,5 @@
 import { Project, ProjectMember, ProjectMemberWrite } from '@devyard/contracts';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { auditLogs, projectMembers } from '../../src/db/schema.js';
@@ -36,6 +36,7 @@ describe('projects', () => {
       slug: 'my-app',
       myRole: 'owner',
       ownerId: a.ids.developer,
+      owner: { id: a.ids.developer, username: expect.any(String), displayName: expect.any(String) },
       archived: false,
     });
     expect(p.projectType).toBe('empty');
@@ -215,7 +216,11 @@ describe('projects', () => {
       newOwnerId: devBId,
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().data).toMatchObject({ ownerId: devBId, myRole: 'maintainer' });
+    expect(res.json().data).toMatchObject({
+      ownerId: devBId,
+      owner: { id: devBId, username: 'devb' },
+      myRole: 'maintainer',
+    });
     const roles = Object.fromEntries(
       app.db
         .select()
@@ -277,6 +282,54 @@ describe('projects', () => {
     // admins see everything with scope=all; mine is still "owned by me"
     expect((await call(app, a.admin, 'GET', P)).json().meta.total).toBe(5);
     expect((await call(app, a.admin, 'GET', `${P}?scope=mine`)).json().meta.total).toBe(0);
+  });
+
+  it('members: disabled users cannot be added (400)', async () => {
+    const p = await create(a.developer, 'NoDisabled');
+    await call(app, a.admin, 'PATCH', `/api/v1/users/${devBId}`, { status: 'disabled' });
+    const res = await share(a.developer, p.id, devBId, 'developer');
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().error).toMatchObject({
+      code: 'VALIDATION_FAILED',
+      details: [expect.objectContaining({ path: 'userId' })],
+    });
+    expect(
+      app.db.select().from(projectMembers).where(eq(projectMembers.userId, devBId)).all(),
+    ).toEqual([]);
+  });
+
+  it('members: a concurrent add of the same user returns 409, not 500', async () => {
+    const p = await create(a.developer, 'Racy');
+    // Simulate the other request winning the race: it inserts the row after our "already a
+    // member?" check but before our insert, so our insert hits the primary key.
+    app.db.run(
+      sql.raw(`CREATE TEMP TRIGGER race BEFORE INSERT ON project_members
+        WHEN NEW.role = 'developer' BEGIN
+          INSERT INTO project_members (project_id, user_id, role, added_by, created_at, updated_at)
+          VALUES (NEW.project_id, NEW.user_id, 'viewer', NEW.added_by, NEW.created_at, NEW.updated_at);
+        END`),
+    );
+    const res = await share(a.developer, p.id, devBId, 'developer');
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json().error.code).toBe('CONFLICT');
+  });
+
+  it('audit writes share the mutation transaction: a failed audit rolls the change back', async () => {
+    const p = await create(a.developer, 'Atomic');
+    app.db.run(
+      sql.raw(`CREATE TEMP TRIGGER no_audit BEFORE INSERT ON audit_logs
+        WHEN NEW.action LIKE 'project.member_%' OR NEW.action = 'project.update'
+        BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END`),
+    );
+    expect((await share(a.developer, p.id, devBId, 'developer')).statusCode).toBe(500);
+    expect(
+      app.db.select().from(projectMembers).where(eq(projectMembers.projectId, p.id)).all(),
+    ).toHaveLength(1);
+    expect(
+      (await call(app, a.developer, 'PATCH', `${P}/${p.id}`, { name: 'Renamed' })).statusCode,
+    ).toBe(500);
+    const after = await call(app, a.developer, 'GET', `${P}/${p.id}`);
+    expect(after.json().data.name).toBe('Atomic');
   });
 
   it('sharing and project changes are audited', async () => {

@@ -23,15 +23,23 @@ export function callerView(
 }
 
 export function toProject(
+  db: Pick<Db, 'select'>,
   p: ProjectRow,
   view: { myRole: ProjectRole | null; access: 'member' | 'admin' },
 ): Project {
+  // Soft-deleted owners still resolve: ownership must be transferred, so this stays readable.
+  const owner = db
+    .select({ id: users.id, username: users.username, displayName: users.displayName })
+    .from(users)
+    .where(eq(users.id, p.ownerId))
+    .get()!;
   return {
     id: p.id,
     slug: p.slug,
     name: p.name,
     description: p.description,
     ownerId: p.ownerId,
+    owner,
     projectType: p.projectType as Project['projectType'],
     primaryLanguage: p.primaryLanguage,
     framework: p.framework,
